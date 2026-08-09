@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Classify a clip{% endblock %}
+{% block content %}
+<h1>Classify a voice clip</h1>
+<p>Upload a short audio clip (wav, flac, or mp3). This runs the exact same feature-extraction and
+  model code the batch and streaming pipeline use - not a separate demo-only model.</p>
+
+<form method="post" enctype="multipart/form-data">
+  <input type="file" name="audio" accept="audio/*" required>
+  <button type="submit">Classify</button>
+</form>
+
+{% if error %}
+  <p class="error">{{ error }}</p>
+{% endif %}
+
+{% if result %}
+  <div class="result {{ 'spoof' if result.label == 'AI-generated' else 'human' }}">
+    <h2>{{ result.label }}</h2>
+    <p>Confidence: {{ result.confidence }}%</p>
+  </div>
+{% endif %}
+{% endblock %}

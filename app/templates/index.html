@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Human-or-AI Voice Detector{% endblock %}
+{% block content %}
+<h1>Human-or-AI Voice Detector</h1>
+<p>
+  A bonafide-vs-spoof classifier trained on the
+  <a href="https://www.kaggle.com/datasets/awsaf49/asvpoof-2019-dataset" target="_blank">ASVspoof2019 (LA)</a>
+  dataset: real human speech vs. text-to-speech / voice-conversion synthetic speech.
+</p>
+<p>Built for the BIU Big Data and AI course project. Pipeline: MinIO (object store) &rarr; Spark
+  (batch feature extraction) &rarr; scikit-learn classifier &rarr; Kafka + streaming enrichment &rarr;
+  Elasticsearch. See <code>docs/DESIGN.md</code> and <code>docs/EXPLANATION.md</code> in the repo for the
+  full write-up.</p>
+<p>
+  <a class="button" href="/classify">Try the classifier &rarr;</a>
+  <a class="button secondary" href="/dashboard">View pipeline insights &rarr;</a>
+</p>
+{% endblock %}

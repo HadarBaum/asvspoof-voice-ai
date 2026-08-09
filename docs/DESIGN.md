@@ -1,0 +1,99 @@
+# Design document — Human-or-AI Voice Detector
+
+BIU Big Data and AI course project. Dataset: [ASVspoof2019](https://www.kaggle.com/datasets/awsaf49/asvpoof-2019-dataset)
+(Logical Access partition) — real human speech vs. text-to-speech / voice-conversion
+synthetic speech.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    K[Kaggle: ASVspoof2019 LA<br/>train + dev + eval, ~121k flac files] -->|one-time download| RAW[data/raw/]
+    RAW -->|ingest_to_minio.py| MINIO[(MinIO<br/>object store<br/>bucket: asvspoof-raw)]
+
+    MINIO -->|batch_feature_extraction.py<br/>Spark, parallel across cores| FEAT[Acoustic features<br/>MFCC / spectral / pitch stats]
+    FEAT --> PARQUET[(Parquet<br/>feature table)]
+    FEAT --> ESTF[(Elasticsearch<br/>asvspoof-training-features)]
+
+    PARQUET -->|train_classifier.py| MODEL[[Random Forest<br/>bonafide vs spoof]]
+    MODEL --> MODELFILE[(models/voice_classifier.joblib)]
+    MODEL --> ESTR[(Elasticsearch<br/>asvspoof-training-results)]
+
+    PROD[kafka_producer.py<br/>replays eval-set events] -->|Kafka topic<br/>asvspoof-events| CONS[streaming_enrichment.py<br/>Kafka consumer]
+    MINIO -->|fetch clip by key| CONS
+    MODELFILE -->|score| CONS
+    CONS --> ESPRED[(Elasticsearch<br/>asvspoof-predictions)]
+
+    ESPRED --> INSIGHTS[insights.py<br/>aggregations -> charts + RESULTS.md]
+    ESPRED --> DASH[Flask /dashboard]
+    MODELFILE --> CLASSIFY[Flask /classify<br/>upload a clip -> Human / AI-generated]
+```
+
+## Data flow
+
+1. **Ingest (object store).** The raw ASVspoof2019 LA flac corpus is uploaded to MinIO,
+   an S3-compatible object store, keyed by partition and filename. Protocol metadata
+   (speaker id, attack id, bonafide/spoof label) stays in small local text files —
+   only the audio bytes, the actually "big" unstructured data, go into the object store.
+2. **Transform (Spark).** A PySpark batch job lists the labeled train+dev utterances,
+   fans out across partitions, and for each one fetches the clip from MinIO and computes
+   a fixed-length acoustic feature vector (20 MFCC coefficients + spectral/pitch/energy
+   statistics). This is the actual "big data" step — parallelizing feature extraction
+   across tens of thousands of audio files instead of a single-threaded loop.
+3. **Load.** The feature table is written to Parquet (input to training) and to
+   Elasticsearch (`asvspoof-training-features`), a NoSQL document store, for ad-hoc
+   querying/aggregation.
+4. **AI capability — training.** A Random Forest classifier is trained on the train
+   partition and validated on the dev partition (the dataset's own speaker-disjoint
+   split, not a random split — see EXPLANATION.md for why that matters for anti-spoofing).
+   The model and its metrics are saved and indexed into Elasticsearch.
+5. **AI capability — streaming enrichment.** A Kafka producer replays eval-set utterance
+   events (metadata only — a MinIO key, not raw audio) onto a topic, simulating new
+   audio arriving. A consumer scores each event with the already-trained model in
+   near-real-time and writes an enriched prediction document (prediction, confidence,
+   correctness against the known label) to Elasticsearch.
+6. **Insights.** `insights.py` runs Elasticsearch aggregations — detection accuracy
+   overall and per attack type (A01-A19), a confusion matrix, class balance — and
+   writes both a markdown report and the charts the dashboard displays.
+7. **Serving.** A small Flask app exposes `/classify` (upload a clip, get scored by the
+   exact same feature-extraction + model code as the pipeline) and `/dashboard`
+   (insights queried live from Elasticsearch).
+
+## Technologies used
+
+| Technology | Role | Course topic |
+|---|---|---|
+| MinIO | Object store for the raw audio corpus | Object store (S3-compatible) |
+| Apache Kafka (KRaft mode) | Event stream simulating incoming audio | Streaming technology |
+| Apache Spark (PySpark, local mode) | Parallel batch feature extraction | Apache Spark / batch processing |
+| Elasticsearch | Document store for features, training results, predictions; aggregation queries | NoSQL database |
+| Docker Compose | Runs MinIO + Kafka + Elasticsearch as containers | Containers and virtualization |
+| scikit-learn | Random Forest classifier (the AI capability) | ML/predictive analytics (brief §6.2f) |
+| Flask | Demo web app | RESTful APIs |
+
+## AI capability
+
+**Category (f) — Machine learning and predictive analytics**, applied in a streaming
+context resembling category (e): a Random Forest is trained on acoustic features to
+distinguish bonafide (human) from spoofed (AI-generated: TTS/voice-conversion) speech,
+then applied to each utterance as it "arrives" via Kafka, enriching it with a
+prediction and confidence score written to Elasticsearch. The same trained model also
+backs the web app's live classify endpoint. See `docs/EXPLANATION.md` for the full
+walkthrough of every component, and `docs/RESULTS.md` for the actual numbers.
+
+## Key trade-offs
+
+- **Python end-to-end, not Scala.** Spark's native language is Scala, but the audio
+  feature-extraction library (librosa) is Python-only — a Scala job would still need
+  to shell out to Python per partition, adding ceremony with no performance gain.
+  One language end-to-end also means every stage is easy to read and defend in Q&A.
+- **Plain Kafka consumer, not Spark Structured Streaming, for the enrichment step.**
+  Spark's real "big data" role here is the parallelized batch feature extraction over
+  tens of thousands of files; routing the comparatively light per-message scoring
+  through a second Spark job would only add a heavyweight, Maven-resolved connector
+  dependency for no real benefit.
+- **Spark runs in local mode**, not a multi-node cluster — appropriate for a laptop-scale
+  course project and far simpler to demo and debug.
+- **Only the LA (Logical Access) partition is used**, not PA (Physical Access/replay
+  attacks) — PA spoofing is a person replaying a recording, not AI-generated speech,
+  so it doesn't fit the "human-or-AI" framing.
