@@ -20,7 +20,10 @@ def get_client():
         endpoint_url=MINIO_ENDPOINT,
         aws_access_key_id=MINIO_ACCESS_KEY,
         aws_secret_access_key=MINIO_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
+        # botocore defaults to a 10-connection pool; ingest_to_minio.py shares one
+        # client across many upload threads, so a small pool serializes most of
+        # them behind the 10 that fit, defeating the point of threading.
+        config=Config(signature_version="s3v4", max_pool_connections=64),
         region_name="us-east-1",
     )
 

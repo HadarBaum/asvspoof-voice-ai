@@ -23,12 +23,33 @@ import os
 from datetime import datetime, timezone
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import accuracy_score, classification_report, f1_score, precision_score, recall_score
+from sklearn.metrics import (
+    accuracy_score,
+    classification_report,
+    f1_score,
+    precision_score,
+    recall_score,
+    roc_auc_score,
+    roc_curve,
+)
 
 from common import es_client
 from common.features import FEATURE_NAMES
+
+
+def equal_error_rate(y_true_spoof, y_score_spoof):
+    """The standard ASVspoof challenge metric: the point on the ROC curve where
+    the false-acceptance rate (spoof passed off as bonafide) equals the
+    false-rejection rate (bonafide wrongly flagged as spoof). More meaningful
+    here than raw accuracy, which - as this run's own numbers show - can look
+    good while quietly missing most of the minority (bonafide) class."""
+    fpr, tpr, _ = roc_curve(y_true_spoof, y_score_spoof)
+    fnr = 1 - tpr
+    eer_idx = np.nanargmin(np.abs(fnr - fpr))
+    return float((fpr[eer_idx] + fnr[eer_idx]) / 2.0)
 
 
 def main():
@@ -59,6 +80,7 @@ def main():
     clf.fit(X_train, y_train)
 
     y_pred = clf.predict(X_dev)
+    y_proba_spoof = clf.predict_proba(X_dev)[:, 1]
     metrics = {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "trained_at": datetime.now(timezone.utc).isoformat(),
@@ -68,6 +90,13 @@ def main():
         "precision_dev": precision_score(y_dev, y_pred),
         "recall_dev": recall_score(y_dev, y_pred),
         "f1_dev": f1_score(y_dev, y_pred),
+        # accuracy/precision/recall above are computed at the default 0.5 decision
+        # threshold and, on a ~90/10 imbalanced dev set, can look strong while
+        # quietly failing the minority class - see docs/EXPLANATION.md. EER and
+        # ROC-AUC are threshold-independent and EER specifically is the metric
+        # the official ASVspoof challenge itself is scored on.
+        "roc_auc_dev": roc_auc_score(y_dev, y_proba_spoof),
+        "eer_dev": equal_error_rate(y_dev, y_proba_spoof),
     }
 
     print(json.dumps(metrics, indent=2))

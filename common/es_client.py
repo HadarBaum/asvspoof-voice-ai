@@ -50,6 +50,8 @@ _RESULTS_FIELDS = {
     "precision_dev": {"type": "float"},
     "recall_dev": {"type": "float"},
     "f1_dev": {"type": "float"},
+    "roc_auc_dev": {"type": "float"},
+    "eer_dev": {"type": "float"},
 }
 
 

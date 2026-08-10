@@ -203,6 +203,37 @@ speaker's voice* or *that particular attack's fingerprint* rather than general
 bonafide-vs-spoof cues, inflating dev accuracy in a way that wouldn't generalize.
 ASVspoof2019's speaker-disjoint partitions exist specifically to prevent this.
 
+**What the full-scale run (25,380 train + 24,844 dev utterances) actually found —
+and why accuracy alone would have hidden it:** dev accuracy at the default 0.5
+decision threshold is 92.3%, which sounds strong, but the per-class breakdown tells
+a different story:
+
+```
+                  precision    recall  f1-score   support
+bonafide (human)       0.93      0.27      0.42      2548
+      spoof (AI)       0.92      1.00      0.96     22296
+```
+
+The model catches essentially all spoofed speech (99.8% recall) but correctly
+flags only 27% of real human speech as bonafide - it's heavily biased toward
+predicting "spoof." This is the **accuracy paradox**: dev is ~90% spoof, so a
+model that just leans toward the majority class scores well on accuracy while
+failing the minority class. `class_weight="balanced"` reweights the *training*
+loss, but it doesn't change the *default 0.5 threshold* `predict()` applies at
+evaluation time - the two are different levers, and only fixing one isn't enough.
+
+This is exactly why the training script also reports **ROC-AUC (0.969)** and
+**EER (9.09%)** — both threshold-independent, and EER specifically is the metric
+the official ASVspoof challenge itself is scored on (see `equal_error_rate()` in
+this file). A 9% EER means the underlying probability scores separate the two
+classes reasonably well (consistent with the strong ROC-AUC); the poor recall
+above is a threshold-placement problem on top of a genuinely OK-scoring model,
+not evidence the features carry no signal. A natural next step - noted here
+rather than implemented, to keep the submission's scope honest about what was
+and wasn't done - would be to move the decision threshold to the EER operating
+point instead of 0.5, which would trade some spoof recall for much better
+bonafide recall.
+
 ### `pipeline/kafka_producer.py` + `pipeline/streaming_enrichment.py` — the AI capability, streaming half
 `kafka_producer.py` replays the eval partition's utterance metadata (MinIO key +
 attack id + true label — **not** the audio itself) onto the `asvspoof-events` Kafka
@@ -215,6 +246,22 @@ model (`predict_proba`), and writes an enriched document (prediction, confidence
 whether it matched the known true label, a timestamp) into Elasticsearch
 (`asvspoof-predictions`) — one document per utterance, as it's scored, not in a
 batch after the fact.
+
+**On the full-scale run, the streaming demo processed 1,165 of the 5,000 eval
+utterances queued, not all 5,000.** The Kafka producer/consumer pair itself
+worked correctly throughout - every message that was consumed was fetched,
+scored, and written to Elasticsearch with no errors - but consumer throughput
+on this machine was, unpredictably, far below what standalone benchmarking of
+the same `extract_features` + `predict_proba` call chain measured (roughly
+0.1-0.3s/utterance in isolation vs. an effective multi-second/utterance rate
+under sustained background execution). The batch Spark job hit the same kind
+of unpredictable slowdown earlier in this run and eventually pushed through it;
+the streaming step was capped at 1,165 scored utterances - still enough to
+cover every attack type in eval (see `docs/RESULTS.md`) - rather than spend
+several more hours on what is a secondary demonstration of an AI capability
+already fully validated by the batch training run above. The root cause was
+never conclusively identified; the leading candidate is Windows throttling
+long-running background console processes, though this was never proven.
 
 The consumer joins a named consumer group (`asvspoof-streaming-enrichment`) with
 auto-commit enabled, so Kafka tracks how far it's read. Without a group id, every

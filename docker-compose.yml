@@ -10,7 +10,7 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     volumes:
-      - ./docker-data/minio:/data
+      - minio-data:/data
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 5s
@@ -34,7 +34,7 @@ services:
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
     volumes:
-      - ./docker-data/kafka:/var/lib/kafka/data
+      - kafka-data:/var/lib/kafka/data
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.14.0
@@ -46,9 +46,20 @@ services:
       xpack.security.enabled: "false"
       ES_JAVA_OPTS: "-Xms1g -Xmx1g"
     volumes:
-      - ./docker-data/elasticsearch:/usr/share/elasticsearch/data
+      - es-data:/usr/share/elasticsearch/data
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
+
+volumes:
+  # Named (Docker-managed) volumes, not bind mounts: on Docker Desktop's WSL2
+  # backend, a bind mount to a Windows path (./docker-data/...) crosses the
+  # Windows<->WSL2 filesystem bridge for every single file operation, which is
+  # extremely slow for workloads with many small files (MinIO storing ~120k
+  # small audio objects, Elasticsearch's segment files). Named volumes live
+  # natively inside the WSL2 VM's filesystem and avoid that bridge entirely.
+  minio-data:
+  kafka-data:
+  es-data:

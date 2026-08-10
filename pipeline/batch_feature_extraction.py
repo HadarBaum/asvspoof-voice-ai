@@ -80,7 +80,20 @@ def main():
             )
     print(f"Loaded {len(utterance_rows)} labeled utterances from protocol files.")
 
-    spark = SparkSession.builder.appName("asvspoof-batch-feature-extraction").getOrCreate()
+    spark = (
+        SparkSession.builder.appName("asvspoof-batch-feature-extraction")
+        # Docker Desktop adds a "host.docker.internal" entry that can confuse
+        # Spark's automatic hostname detection into advertising the driver's RPC
+        # endpoint under that name instead of localhost. Executors then can't
+        # resolve it back ("RpcEndpointNotFoundException: Cannot find endpoint:
+        # spark://CoarseGrainedScheduler@host.docker.internal:...") - workers
+        # keep computing but can never report results back, so the job hangs
+        # indefinitely with zero completed tasks. Pinning both explicitly to
+        # localhost avoids the bad auto-detection.
+        .config("spark.driver.host", "127.0.0.1")
+        .config("spark.driver.bindAddress", "127.0.0.1")
+        .getOrCreate()
+    )
 
     # Repartition so extraction actually spreads across cores instead of running
     # as one giant partition; ~200 files per task is a reasonable chunk size.
