@@ -27,11 +27,11 @@ import argparse
 import json
 from datetime import datetime, timezone
 
-import joblib
 from kafka import KafkaConsumer
 
 from common import es_client, minio_client
 from common.features import extract_features, features_to_vector
+from common.model import load_model
 
 TOPIC = "asvspoof-events"
 
@@ -46,9 +46,16 @@ def main():
         default=15000,
         help="Stop after this many ms with no new message (0 = run forever)",
     )
+    parser.add_argument(
+        "--group-id",
+        default="asvspoof-streaming-enrichment",
+        help="Kafka consumer group id. Use a new one to re-score the whole topic from the start "
+        "(e.g. after swapping in a new model) instead of resuming from a previous run's offset.",
+    )
     args = parser.parse_args()
 
-    clf = joblib.load(args.model)
+    scored_model = load_model(args.model)
+    print(f"Loaded '{scored_model.model_name}' (decision threshold {scored_model.threshold:.3f})")
     minio = minio_client.get_client()
     es = es_client.get_client()
     es_client.ensure_indices(es)
@@ -60,7 +67,7 @@ def main():
         # A named consumer group lets Kafka track our offset: on first run we start
         # from the beginning of the topic, but a restart resumes from where we left
         # off instead of re-scoring every utterance that was ever published.
-        group_id="asvspoof-streaming-enrichment",
+        group_id=args.group_id,
         auto_offset_reset="earliest",
         enable_auto_commit=True,
         consumer_timeout_ms=args.consumer_timeout_ms,
@@ -74,10 +81,7 @@ def main():
             audio_bytes = minio_client.get_object_bytes(minio, event["key"])
             feats = extract_features(audio_bytes)
             vector = features_to_vector(feats)
-
-            proba = clf.predict_proba(vector)[0]  # [P(bonafide), P(spoof)]
-            predicted_label = "spoof" if proba[1] >= 0.5 else "bonafide"
-            confidence = float(max(proba))
+            predicted_label, confidence = scored_model.classify(vector)
 
             doc = {
                 "key": event["key"],

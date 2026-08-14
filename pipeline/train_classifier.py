@@ -3,10 +3,17 @@ Step 3 of the pipeline: train the AI capability itself - a bonafide-vs-spoof
 ("human"-vs-"AI-generated") classifier - on the Parquet feature table produced
 by batch_feature_extraction.py.
 
-A Random Forest on the acoustic summary-statistics features is deliberately
-simple: it's fast to train, easy to reason about (feature importances are
-directly inspectable), and - per the project brief - a simpler model you
-fully understand and can defend beats a more complex one you can't.
+Trains two candidate models (Random Forest and Gradient Boosting) on the same
+features and picks the one with the lower EER - the metric the official
+ASVspoof challenge itself is scored on, and a fairer comparison than raw
+accuracy on an imbalanced dev set. Both are simple enough to fully explain in
+Q&A (unlike, say, a CNN over raw spectrograms) while giving a real point of
+comparison for the results write-up rather than a single unchallenged number.
+
+The saved model artifact bundles the classifier together with its own
+EER-optimal decision threshold (see `compute_eer` below) - every downstream
+consumer (the streaming enrichment consumer, the web app's /classify
+endpoint) loads both from one file and never hardcodes a threshold itself.
 
 Train/dev split follows the dataset's own partitions (ASVspoof2019 ships
 train and dev as separate speaker-disjoint sets), not a random split -
@@ -25,7 +32,7 @@ from datetime import datetime, timezone
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
     classification_report,
@@ -35,21 +42,42 @@ from sklearn.metrics import (
     roc_auc_score,
     roc_curve,
 )
+from sklearn.utils.class_weight import compute_sample_weight
 
 from common import es_client
 from common.features import FEATURE_NAMES
 
 
-def equal_error_rate(y_true_spoof, y_score_spoof):
+def compute_eer(y_true_spoof, y_score_spoof):
     """The standard ASVspoof challenge metric: the point on the ROC curve where
     the false-acceptance rate (spoof passed off as bonafide) equals the
     false-rejection rate (bonafide wrongly flagged as spoof). More meaningful
-    here than raw accuracy, which - as this run's own numbers show - can look
-    good while quietly missing most of the minority (bonafide) class."""
-    fpr, tpr, _ = roc_curve(y_true_spoof, y_score_spoof)
+    here than raw accuracy, which - as this project's own numbers show - can
+    look good while quietly missing most of the minority (bonafide) class.
+
+    Returns (eer, threshold): `threshold` is the P(spoof) score above which a
+    clip should be called spoof to actually operate at that equal-error point
+    - unlike EER itself, this is something downstream code can act on, since
+    scikit-learn's default `.predict()` always uses a fixed 0.5 threshold
+    regardless of the training class weights.
+    """
+    fpr, tpr, thresholds = roc_curve(y_true_spoof, y_score_spoof)
     fnr = 1 - tpr
     eer_idx = np.nanargmin(np.abs(fnr - fpr))
-    return float((fpr[eer_idx] + fnr[eer_idx]) / 2.0)
+    eer = float((fpr[eer_idx] + fnr[eer_idx]) / 2.0)
+    return eer, float(thresholds[eer_idx])
+
+
+def evaluate_at_threshold(y_dev, y_proba_spoof, threshold):
+    y_pred = (y_proba_spoof >= threshold).astype(int)
+    return {
+        "threshold": threshold,
+        "accuracy": accuracy_score(y_dev, y_pred),
+        "precision_spoof": precision_score(y_dev, y_pred, zero_division=0),
+        "recall_spoof": recall_score(y_dev, y_pred, zero_division=0),
+        "recall_bonafide": recall_score(y_dev, y_pred, pos_label=0, zero_division=0),
+        "f1_spoof": f1_score(y_dev, y_pred, zero_division=0),
+    }
 
 
 def main():
@@ -57,6 +85,9 @@ def main():
     parser.add_argument("--features", required=True, help="Parquet feature table path")
     parser.add_argument("--model-out", required=True)
     parser.add_argument("--metrics-out", default=os.path.join(os.path.dirname(__file__), "..", "docs", "training_metrics.json"))
+    parser.add_argument(
+        "--comparison-out", default=os.path.join(os.path.dirname(__file__), "..", "docs", "model_comparison.json")
+    )
     args = parser.parse_args()
 
     df = pd.read_parquet(args.features)
@@ -70,52 +101,92 @@ def main():
     X_train, y_train = train_df[FEATURE_NAMES], train_df["y"]
     X_dev, y_dev = dev_df[FEATURE_NAMES], dev_df["y"]
 
-    clf = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=None,
-        class_weight="balanced",  # spoof attacks heavily outnumber bonafide clips in ASVspoof2019
-        random_state=42,
-        n_jobs=-1,
-    )
-    clf.fit(X_train, y_train)
+    # class_weight="balanced" is a first-class RandomForestClassifier option, but
+    # GradientBoostingClassifier has no such parameter - the portable way to
+    # reweight both is via per-sample weights computed the same way underneath.
+    sample_weight_train = compute_sample_weight("balanced", y_train)
 
-    y_pred = clf.predict(X_dev)
-    y_proba_spoof = clf.predict_proba(X_dev)[:, 1]
+    candidates = {
+        "random_forest": RandomForestClassifier(
+            n_estimators=200, max_depth=None, class_weight="balanced", random_state=42, n_jobs=-1
+        ),
+        "gradient_boosting": GradientBoostingClassifier(
+            n_estimators=150, max_depth=3, learning_rate=0.1, random_state=42
+        ),
+    }
+
+    comparison = {}
+    fitted = {}
+    for name, clf in candidates.items():
+        print(f"Training {name} ...")
+        clf.fit(X_train, y_train, sample_weight=sample_weight_train)
+        fitted[name] = clf
+
+        y_proba = clf.predict_proba(X_dev)[:, 1]
+        eer, eer_threshold = compute_eer(y_dev, y_proba)
+        comparison[name] = {
+            "roc_auc": roc_auc_score(y_dev, y_proba),
+            "eer": eer,
+            "eer_threshold": eer_threshold,
+            # at the default 0.5 threshold scikit-learn's own .predict() would use -
+            # kept to make the accuracy-paradox comparison concrete per model
+            "at_default_threshold_0.5": evaluate_at_threshold(y_dev, y_proba, 0.5),
+            # at this model's own EER threshold - the operating point actually used
+            "at_eer_threshold": evaluate_at_threshold(y_dev, y_proba, eer_threshold),
+        }
+        print(f"  {name}: EER={eer:.4f}  ROC-AUC={comparison[name]['roc_auc']:.4f}")
+
+    best_name = min(comparison, key=lambda n: comparison[n]["eer"])
+    best_clf = fitted[best_name]
+    best = comparison[best_name]
+    print(f"\nSelected '{best_name}' (lowest EER = {best['eer']:.4f}) as the deployed model.")
+
+    y_pred_best = (best_clf.predict_proba(X_dev)[:, 1] >= best["eer_threshold"]).astype(int)
+    print(f"\nClassification report for '{best_name}' at its EER threshold ({best['eer_threshold']:.3f}):")
+    print(classification_report(y_dev, y_pred_best, target_names=["bonafide (human)", "spoof (AI)"], zero_division=0))
+
+    feature_importance = []
+    if hasattr(best_clf, "feature_importances_"):
+        feature_importance = sorted(
+            zip(FEATURE_NAMES, best_clf.feature_importances_), key=lambda kv: kv[1], reverse=True
+        )[:10]
+        print("Top 10 most important features:")
+        for name, importance in feature_importance:
+            print(f"  {name}: {importance:.4f}")
+
+    os.makedirs(os.path.dirname(args.model_out), exist_ok=True)
+    # Bundle the model with its own decision threshold so nothing downstream
+    # (the streaming consumer, the web app) ever has to hardcode 0.5 again.
+    joblib.dump({"model": best_clf, "model_name": best_name, "threshold": best["eer_threshold"]}, args.model_out)
+    print(f"Saved model to {args.model_out}")
+
     metrics = {
         "run_id": datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
         "trained_at": datetime.now(timezone.utc).isoformat(),
         "n_train": len(train_df),
         "n_dev": len(dev_df),
-        "accuracy_dev": accuracy_score(y_dev, y_pred),
-        "precision_dev": precision_score(y_dev, y_pred),
-        "recall_dev": recall_score(y_dev, y_pred),
-        "f1_dev": f1_score(y_dev, y_pred),
-        # accuracy/precision/recall above are computed at the default 0.5 decision
-        # threshold and, on a ~90/10 imbalanced dev set, can look strong while
-        # quietly failing the minority class - see docs/EXPLANATION.md. EER and
-        # ROC-AUC are threshold-independent and EER specifically is the metric
-        # the official ASVspoof challenge itself is scored on.
-        "roc_auc_dev": roc_auc_score(y_dev, y_proba_spoof),
-        "eer_dev": equal_error_rate(y_dev, y_proba_spoof),
+        "model_name": best_name,
+        "decision_threshold": best["eer_threshold"],
+        "roc_auc_dev": best["roc_auc"],
+        "eer_dev": best["eer"],
+        "accuracy_dev": best["at_eer_threshold"]["accuracy"],
+        "precision_dev": best["at_eer_threshold"]["precision_spoof"],
+        "recall_dev": best["at_eer_threshold"]["recall_spoof"],
+        "recall_bonafide_dev": best["at_eer_threshold"]["recall_bonafide"],
+        "f1_dev": best["at_eer_threshold"]["f1_spoof"],
+        # kept so the accuracy-paradox story (see docs/EXPLANATION.md) stays
+        # backed by real numbers even after the threshold fix is applied
+        "accuracy_dev_default_threshold_0.5": best["at_default_threshold_0.5"]["accuracy"],
+        "recall_bonafide_dev_default_threshold_0.5": best["at_default_threshold_0.5"]["recall_bonafide"],
     }
-
-    print(json.dumps(metrics, indent=2))
-    print(classification_report(y_dev, y_pred, target_names=["bonafide (human)", "spoof (AI)"]))
-
-    feature_importance = sorted(
-        zip(FEATURE_NAMES, clf.feature_importances_), key=lambda kv: kv[1], reverse=True
-    )[:10]
-    print("Top 10 most important features:")
-    for name, importance in feature_importance:
-        print(f"  {name}: {importance:.4f}")
-
-    os.makedirs(os.path.dirname(args.model_out), exist_ok=True)
-    joblib.dump(clf, args.model_out)
-    print(f"Saved model to {args.model_out}")
 
     os.makedirs(os.path.dirname(args.metrics_out), exist_ok=True)
     with open(args.metrics_out, "w") as f:
         json.dump({**metrics, "top_features": feature_importance}, f, indent=2)
+
+    with open(args.comparison_out, "w") as f:
+        json.dump({"selected": best_name, "candidates": comparison}, f, indent=2)
+    print(f"Wrote model comparison to {args.comparison_out}")
 
     es = es_client.get_client()
     es_client.ensure_indices(es)

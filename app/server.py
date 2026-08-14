@@ -1,9 +1,11 @@
 """
-Demo web app. Two things, both operating on real pipeline artifacts:
+Demo web app. Three things, all operating on real pipeline artifacts:
 
   /             overview + links
   /classify     upload a clip -> extract_features() -> the SAME saved model
-                the batch/streaming pipeline uses -> Human or AI-generated + confidence
+                the batch/streaming pipeline uses -> Human or AI-generated +
+                confidence, plus the 5 most acoustically similar training
+                clips via Elasticsearch k-NN search over the same features
   /dashboard    insights pulled live from Elasticsearch (accuracy by attack
                 type, confusion matrix, class balance, training metrics) -
                 the same aggregations pipeline/insights.py computes, queried
@@ -24,19 +26,54 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common import es_client  # noqa: E402
 from common.features import extract_features, features_to_vector  # noqa: E402
+from common.model import load_model  # noqa: E402
 
 MODEL_PATH = os.environ.get("MODEL_PATH", os.path.join(os.path.dirname(__file__), "..", "models", "voice_classifier.joblib"))
+SCALER_PATH = os.environ.get(
+    "SCALER_PATH", os.path.join(os.path.dirname(__file__), "..", "models", "embedding_scaler.joblib")
+)
 METRICS_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "training_metrics.json")
 
 app = Flask(__name__)
 _model = None
+_scaler = None
 
 
 def get_model():
     global _model
     if _model is None:
-        _model = joblib.load(MODEL_PATH)
+        _model = load_model(MODEL_PATH)
     return _model
+
+
+def get_scaler():
+    global _scaler
+    if _scaler is None:
+        _scaler = joblib.load(SCALER_PATH)
+    return _scaler
+
+
+def find_similar_clips(vector, k=5):
+    """k-NN search over the same standardized feature vectors indexed by
+    pipeline/index_embeddings.py - "semantic search" for acoustically similar
+    training clips instead of a keyword match."""
+    standardized = get_scaler().transform(vector).tolist()[0]
+    es = es_client.get_client()
+    res = es.search(
+        index=es_client.TRAINING_FEATURES_INDEX,
+        knn={"field": es_client.EMBEDDING_FIELD, "query_vector": standardized, "k": k, "num_candidates": 100},
+        source=["key", "label", "attack_id", "partition"],
+    )
+    return [
+        {
+            "key": hit["_source"]["key"].rsplit("/", 1)[-1],
+            "label": "AI-generated" if hit["_source"]["label"] == "spoof" else "Human",
+            "attack_id": hit["_source"]["attack_id"],
+            "partition": hit["_source"]["partition"],
+            "similarity": round(hit["_score"], 3),
+        }
+        for hit in res["hits"]["hits"]
+    ]
 
 
 @app.route("/")
@@ -57,13 +94,15 @@ def classify():
                 audio_bytes = uploaded.read()
                 feats = extract_features(audio_bytes)
                 vector = features_to_vector(feats)
-                clf = get_model()
-                proba = clf.predict_proba(vector)[0]  # [P(bonafide), P(spoof)]
-                is_spoof = proba[1] >= 0.5
+                label, confidence = get_model().classify(vector)
                 result = {
-                    "label": "AI-generated" if is_spoof else "Human",
-                    "confidence": round(float(max(proba)) * 100, 1),
+                    "label": "AI-generated" if label == "spoof" else "Human",
+                    "confidence": round(confidence * 100, 1),
                 }
+                try:
+                    result["similar"] = find_similar_clips(vector)
+                except Exception as exc:  # noqa: BLE001 - similarity search is a bonus, never block the main result
+                    print(f"WARN: similarity search failed: {exc}")
             except Exception as exc:  # noqa: BLE001
                 error = f"Could not process that file: {exc}"
     return render_template("classify.html", result=result, error=error)

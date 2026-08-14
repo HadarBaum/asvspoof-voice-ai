@@ -2,13 +2,28 @@
 {% block title %}Classify a clip{% endblock %}
 {% block content %}
 <h1>Classify a voice clip</h1>
-<p>Upload a short audio clip (wav, flac, or mp3). This runs the exact same feature-extraction and
-  model code the batch and streaming pipeline use - not a separate demo-only model.</p>
+<p>Upload a short clip or record one live from your microphone. Either way this runs the exact
+  same feature-extraction and model code the batch and streaming pipeline use - not a separate
+  demo-only model.</p>
 
-<form method="post" enctype="multipart/form-data">
-  <input type="file" name="audio" accept="audio/*" required>
-  <button type="submit">Classify</button>
-</form>
+<div class="card">
+  <form method="post" enctype="multipart/form-data" id="upload-form">
+    <div class="methods">
+      <div>
+        <h3>Upload a file</h3>
+        <input type="file" name="audio" id="audio-input" accept="audio/*">
+      </div>
+      <div>
+        <h3>Or record live</h3>
+        <button type="button" id="record-btn">Start recording</button>
+        <span class="rec-indicator" id="rec-indicator" hidden>
+          <span class="rec-dot"></span> <span id="rec-timer">0.0s</span>
+        </span>
+      </div>
+    </div>
+    <button type="submit" id="submit-btn">Classify</button>
+  </form>
+</div>
 
 {% if error %}
   <p class="error">{{ error }}</p>
@@ -18,6 +33,135 @@
   <div class="result {{ 'spoof' if result.label == 'AI-generated' else 'human' }}">
     <h2>{{ result.label }}</h2>
     <p>Confidence: {{ result.confidence }}%</p>
+    <div class="confidence-bar">
+      <div class="confidence-bar-fill" style="width: {{ result.confidence }}%"></div>
+    </div>
   </div>
+
+  {% if result.similar %}
+  <div class="card" style="margin-top: 1.5rem;">
+    <h3>Most acoustically similar training clips</h3>
+    <p style="color: var(--text-muted); font-size: 0.9rem; margin-top: 0;">
+      Nearest neighbors by cosine similarity over the same standardized acoustic feature vectors
+      (Elasticsearch k-NN search) - not a keyword match.
+    </p>
+    <ul class="similar-list">
+      {% for clip in result.similar %}
+        <li>
+          <span><code>{{ clip.key }}</code> <span class="tag {{ 'spoof' if clip.label == 'AI-generated' else 'human' }}">{{ clip.label }}</span></span>
+          <span>similarity {{ clip.similarity }}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
 {% endif %}
+
+<script>
+(function () {
+  const recordBtn = document.getElementById('record-btn');
+  const indicator = document.getElementById('rec-indicator');
+  const timerEl = document.getElementById('rec-timer');
+  const audioInput = document.getElementById('audio-input');
+  const form = document.getElementById('upload-form');
+
+  let audioContext, mediaStream, scriptNode, sourceNode;
+  let chunks = [];
+  let recording = false;
+  let startedAt = 0;
+  let timerHandle = null;
+
+  function mergeChunks(parts) {
+    const total = parts.reduce((sum, p) => sum + p.length, 0);
+    const merged = new Float32Array(total);
+    let offset = 0;
+    for (const p of parts) { merged.set(p, offset); offset += p.length; }
+    return merged;
+  }
+
+  function encodeWav(samples, sampleRate) {
+    const buffer = new ArrayBuffer(44 + samples.length * 2);
+    const view = new DataView(buffer);
+    const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+
+    writeStr(0, 'RIFF');
+    view.setUint32(4, 36 + samples.length * 2, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);   // PCM
+    view.setUint16(22, 1, true);   // mono
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * 2, true);
+    view.setUint16(32, 2, true);
+    view.setUint16(34, 16, true);
+    writeStr(36, 'data');
+    view.setUint32(40, samples.length * 2, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++, offset += 2) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+    }
+    return new Blob([view], { type: 'audio/wav' });
+  }
+
+  async function startRecording() {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    sourceNode = audioContext.createMediaStreamSource(mediaStream);
+    // ScriptProcessorNode is deprecated in favor of AudioWorklet, but needs no
+    // extra module file to load and works everywhere - simplest option for a
+    // single self-contained template.
+    scriptNode = audioContext.createScriptProcessor(4096, 1, 1);
+    chunks = [];
+    scriptNode.onaudioprocess = (e) => chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+    sourceNode.connect(scriptNode);
+    scriptNode.connect(audioContext.destination);
+
+    recording = true;
+    startedAt = Date.now();
+    recordBtn.textContent = 'Stop recording';
+    recordBtn.classList.add('recording');
+    indicator.hidden = false;
+    timerHandle = setInterval(() => {
+      timerEl.textContent = ((Date.now() - startedAt) / 1000).toFixed(1) + 's';
+    }, 100);
+  }
+
+  function stopRecording() {
+    recording = false;
+    clearInterval(timerHandle);
+    scriptNode.disconnect();
+    sourceNode.disconnect();
+    mediaStream.getTracks().forEach((t) => t.stop());
+
+    const sampleRate = audioContext.sampleRate;
+    const merged = mergeChunks(chunks);
+    const wavBlob = encodeWav(merged, sampleRate);
+    const file = new File([wavBlob], 'recording.wav', { type: 'audio/wav' });
+
+    const dt = new DataTransfer();
+    dt.items.add(file);
+    audioInput.files = dt.files;
+
+    recordBtn.textContent = 'Start recording';
+    recordBtn.classList.remove('recording');
+    indicator.hidden = true;
+    form.submit();
+  }
+
+  recordBtn.addEventListener('click', async () => {
+    if (!recording) {
+      try {
+        await startRecording();
+      } catch (err) {
+        alert('Could not access the microphone: ' + err.message);
+      }
+    } else {
+      stopRecording();
+    }
+  });
+})();
+</script>
 {% endblock %}

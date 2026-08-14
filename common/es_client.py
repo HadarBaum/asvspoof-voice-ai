@@ -15,11 +15,16 @@ import os
 
 from elasticsearch import Elasticsearch, helpers
 
+from common.features import FEATURE_NAMES
+
 ES_URL = os.environ.get("ES_URL", "http://localhost:9200")
 
 TRAINING_FEATURES_INDEX = "asvspoof-training-features"
 TRAINING_RESULTS_INDEX = "asvspoof-training-results"
 PREDICTIONS_INDEX = "asvspoof-predictions"
+
+EMBEDDING_FIELD = "embedding"
+EMBEDDING_DIMS = len(FEATURE_NAMES)
 
 _FEATURE_FIELDS = {
     # dynamic mapping handles the ~53 numeric feature columns fine; we only
@@ -29,6 +34,13 @@ _FEATURE_FIELDS = {
     "speaker_id": {"type": "keyword"},
     "attack_id": {"type": "keyword"},
     "label": {"type": "keyword"},
+    # The standardized feature vector, indexed for k-NN similarity search (see
+    # pipeline/index_embeddings.py and app/server.py's /similar route). This is
+    # the "embeddings and semantic search" AI capability option from the course
+    # brief - built on the same acoustic features already computed for the
+    # classifier rather than a separate embedding model, since those features
+    # are exactly the thing meant to capture "how does this clip sound."
+    EMBEDDING_FIELD: {"type": "dense_vector", "dims": EMBEDDING_DIMS, "index": True, "similarity": "cosine"},
 }
 
 _PREDICTIONS_FIELDS = {
@@ -52,6 +64,11 @@ _RESULTS_FIELDS = {
     "f1_dev": {"type": "float"},
     "roc_auc_dev": {"type": "float"},
     "eer_dev": {"type": "float"},
+    "model_name": {"type": "keyword"},
+    "decision_threshold": {"type": "float"},
+    "recall_bonafide_dev": {"type": "float"},
+    "accuracy_dev_default_threshold_0.5": {"type": "float"},
+    "recall_bonafide_dev_default_threshold_0.5": {"type": "float"},
 }
 
 
@@ -71,6 +88,20 @@ def ensure_indices(client: Elasticsearch):
                 index=index,
                 mappings={"properties": fields, "dynamic": True},
             )
+
+
+def ensure_embedding_mapping(client: Elasticsearch):
+    """Adds the embedding field to an already-existing training-features index.
+    ensure_indices() only sets up the mapping for an index it creates fresh;
+    this covers the (very real, this-project-hit-it) case where the index
+    already existed from an earlier pipeline run before embeddings existed.
+    Elasticsearch allows adding new fields to an existing mapping in place -
+    no reindex needed - as long as the field didn't exist under a conflicting
+    type already."""
+    client.indices.put_mapping(
+        index=TRAINING_FEATURES_INDEX,
+        properties={EMBEDDING_FIELD: _FEATURE_FIELDS[EMBEDDING_FIELD]},
+    )
 
 
 def bulk_index(client: Elasticsearch, index: str, docs, id_field: str | None = None):

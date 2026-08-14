@@ -15,18 +15,22 @@ flowchart TD
     FEAT --> PARQUET[(Parquet<br/>feature table)]
     FEAT --> ESTF[(Elasticsearch<br/>asvspoof-training-features)]
 
-    PARQUET -->|train_classifier.py| MODEL[[Random Forest<br/>bonafide vs spoof]]
+    PARQUET -->|train_classifier.py<br/>Random Forest vs Gradient Boosting,<br/>keep lowest EER| MODEL[[Model + EER threshold]]
     MODEL --> MODELFILE[(models/voice_classifier.joblib)]
     MODEL --> ESTR[(Elasticsearch<br/>asvspoof-training-results)]
 
+    PARQUET -->|index_embeddings.py<br/>standardize features| SCALER[(models/embedding_scaler.joblib)]
+    SCALER --> ESTF
+
     PROD[kafka_producer.py<br/>replays eval-set events] -->|Kafka topic<br/>asvspoof-events| CONS[streaming_enrichment.py<br/>Kafka consumer]
     MINIO -->|fetch clip by key| CONS
-    MODELFILE -->|score| CONS
+    MODELFILE -->|score at EER threshold| CONS
     CONS --> ESPRED[(Elasticsearch<br/>asvspoof-predictions)]
 
     ESPRED --> INSIGHTS[insights.py<br/>aggregations -> charts + RESULTS.md]
     ESPRED --> DASH[Flask /dashboard]
-    MODELFILE --> CLASSIFY[Flask /classify<br/>upload a clip -> Human / AI-generated]
+    MODELFILE --> CLASSIFY[Flask /classify<br/>upload or record live -> Human / AI-generated]
+    ESTF -->|k-NN similarity search| CLASSIFY
 ```
 
 ## Data flow
@@ -43,21 +47,30 @@ flowchart TD
 3. **Load.** The feature table is written to Parquet (input to training) and to
    Elasticsearch (`asvspoof-training-features`), a NoSQL document store, for ad-hoc
    querying/aggregation.
-4. **AI capability — training.** A Random Forest classifier is trained on the train
-   partition and validated on the dev partition (the dataset's own speaker-disjoint
-   split, not a random split — see EXPLANATION.md for why that matters for anti-spoofing).
-   The model and its metrics are saved and indexed into Elasticsearch.
-5. **AI capability — streaming enrichment.** A Kafka producer replays eval-set utterance
+4. **AI capability — training + model selection.** Two classifiers (Random Forest,
+   Gradient Boosting) are trained on the train partition and validated on the dev
+   partition (the dataset's own speaker-disjoint split, not a random split — see
+   EXPLANATION.md for why that matters for anti-spoofing). The one with the lower
+   EER is kept, bundled together with its own EER-optimal decision threshold (not
+   the default 0.5 — see EXPLANATION.md's accuracy-paradox discussion for why that
+   matters), and saved as one model artifact. Both models' full metrics and the
+   trade-off table are saved to `docs/model_comparison.json`.
+5. **AI capability — semantic search.** The same standardized feature vectors are
+   indexed into Elasticsearch as `dense_vector` embeddings (`index_embeddings.py`),
+   enabling k-NN "find acoustically similar clips" search instead of a keyword match.
+6. **AI capability — streaming enrichment.** A Kafka producer replays eval-set utterance
    events (metadata only — a MinIO key, not raw audio) onto a topic, simulating new
-   audio arriving. A consumer scores each event with the already-trained model in
-   near-real-time and writes an enriched prediction document (prediction, confidence,
-   correctness against the known label) to Elasticsearch.
-6. **Insights.** `insights.py` runs Elasticsearch aggregations — detection accuracy
+   audio arriving. A consumer scores each event with the already-trained model (at its
+   stored threshold) in near-real-time and writes an enriched prediction document
+   (prediction, confidence, correctness against the known label) to Elasticsearch.
+7. **Insights.** `insights.py` runs Elasticsearch aggregations — detection accuracy
    overall and per attack type (A01-A19), a confusion matrix, class balance — and
    writes both a markdown report and the charts the dashboard displays.
-7. **Serving.** A small Flask app exposes `/classify` (upload a clip, get scored by the
-   exact same feature-extraction + model code as the pipeline) and `/dashboard`
-   (insights queried live from Elasticsearch).
+8. **Serving.** A Flask app exposes `/classify` (upload a clip *or record one live
+   from the microphone*, get scored by the exact same feature-extraction + model
+   code as the pipeline, plus the 5 most similar training clips via k-NN search)
+   and `/dashboard` (insights queried live from Elasticsearch, including a
+   deployed-threshold-vs-default-threshold comparison table).
 
 ## Technologies used
 
@@ -66,20 +79,33 @@ flowchart TD
 | MinIO | Object store for the raw audio corpus | Object store (S3-compatible) |
 | Apache Kafka (KRaft mode) | Event stream simulating incoming audio | Streaming technology |
 | Apache Spark (PySpark, local mode) | Parallel batch feature extraction | Apache Spark / batch processing |
-| Elasticsearch | Document store for features, training results, predictions; aggregation queries | NoSQL database |
+| Elasticsearch | Document store for features/results/predictions, aggregations, **and dense_vector k-NN similarity search** | NoSQL database |
 | Docker Compose | Runs MinIO + Kafka + Elasticsearch as containers | Containers and virtualization |
-| scikit-learn | Random Forest classifier (the AI capability) | ML/predictive analytics (brief §6.2f) |
-| Flask | Demo web app | RESTful APIs |
+| scikit-learn | Random Forest vs. Gradient Boosting classifier comparison (the AI capability) | ML/predictive analytics (brief §6.2f) |
+| Flask | Demo web app, including live in-browser microphone recording (Web Audio API, no external libs) | RESTful APIs |
 
 ## AI capability
 
-**Category (f) — Machine learning and predictive analytics**, applied in a streaming
-context resembling category (e): a Random Forest is trained on acoustic features to
-distinguish bonafide (human) from spoofed (AI-generated: TTS/voice-conversion) speech,
-then applied to each utterance as it "arrives" via Kafka, enriching it with a
-prediction and confidence score written to Elasticsearch. The same trained model also
-backs the web app's live classify endpoint. See `docs/EXPLANATION.md` for the full
-walkthrough of every component, and `docs/RESULTS.md` for the actual numbers.
+Three related capabilities from the course brief, all sharing one feature-extraction
+implementation rather than three disconnected demos:
+
+- **Category (f) — Machine learning and predictive analytics.** Two classifiers are
+  trained and compared on acoustic features to distinguish bonafide (human) from
+  spoofed (AI-generated: TTS/voice-conversion) speech; the better one (by EER, the
+  metric the actual ASVspoof challenge is scored on) is deployed at its own
+  EER-optimal decision threshold rather than scikit-learn's default 0.5 — a real fix
+  for a real problem this project found (see `docs/EXPLANATION.md`'s accuracy-paradox
+  section), not just a theoretical concern.
+- **Category (e)-style streaming.** The deployed model is applied to each utterance
+  as it "arrives" via Kafka, enriching it with a prediction and confidence score
+  written to Elasticsearch in near-real-time.
+- **Category (b) — Embeddings and semantic search.** The same standardized feature
+  vectors back an Elasticsearch k-NN "acoustically similar clips" search, surfaced
+  in the web app's classify results.
+
+The same trained model and embedding space also back the web app's live classify
+endpoint (including live microphone recording). See `docs/EXPLANATION.md` for the
+full walkthrough of every component, and `docs/RESULTS.md` for the actual numbers.
 
 ## Key trade-offs
 
@@ -97,3 +123,16 @@ walkthrough of every component, and `docs/RESULTS.md` for the actual numbers.
 - **Only the LA (Logical Access) partition is used**, not PA (Physical Access/replay
   attacks) — PA spoofing is a person replaying a recording, not AI-generated speech,
   so it doesn't fit the "human-or-AI" framing.
+- **The EER-optimal threshold trades some spoof recall for bonafide recall, and that
+  trade-off is reported, not hidden.** Moving off the default 0.5 threshold fixed a
+  real accuracy-paradox bug (27% → 91% bonafide recall on dev, independently confirmed
+  on live streamed eval data), but a handful of harder attack types score worse under
+  the new threshold than the old one did (see `docs/EXPLANATION.md`). There is no
+  threshold that maximizes both classes' accuracy simultaneously on an imbalanced
+  problem — EER is a principled choice of *which* trade-off to operate at, not a
+  free win.
+- **The embedding is the classifier's own standardized feature vector, not a
+  separate pretrained audio embedding model.** This keeps the "embeddings and
+  semantic search" capability fully self-contained and understandable — no extra
+  model to explain — at the cost of a less semantically rich embedding space than,
+  say, a neural speaker/content embedding would give.

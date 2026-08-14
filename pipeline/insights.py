@@ -98,9 +98,12 @@ def main():
     ]
     if n_predictions < 1000:
         lines.append(
-            "\n*Small sample size - this run used the committed synthetic/sample "
-            "dataset (see `pipeline/dev_generate_synthetic_sample.py`), not the full "
-            "ASVspoof2019 dataset. Re-run the pipeline against `data/raw/LA` for real numbers.*"
+            "\n*Small sample size - either this ran against the committed synthetic/sample "
+            "dataset (see `pipeline/dev_generate_synthetic_sample.py`) rather than the full "
+            "ASVspoof2019 dataset, or the streaming run against the real data was deliberately "
+            "capped short of the full eval queue (see docs/EXPLANATION.md's streaming trade-off "
+            "note for why). Either way, treat per-attack-type breakdowns with correspondingly "
+            "small per-bucket counts as directional, not precise.*"
         )
     lines += [
         "",

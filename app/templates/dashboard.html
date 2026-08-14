@@ -6,13 +6,27 @@
 <section>
   <h2>Training run</h2>
   {% if metrics %}
-    <ul>
-      <li>Trained on {{ metrics.n_train }} utterances, validated on {{ metrics.n_dev }}</li>
-      <li>Dev accuracy: {{ "%.1f"|format(metrics.accuracy_dev * 100) }}%</li>
-      <li>Dev precision: {{ "%.1f"|format(metrics.precision_dev * 100) }}%</li>
-      <li>Dev recall: {{ "%.1f"|format(metrics.recall_dev * 100) }}%</li>
-      <li>Dev F1: {{ "%.1f"|format(metrics.f1_dev * 100) }}%</li>
-    </ul>
+    <div class="card">
+      <p style="margin-top: 0;">
+        Trained on {{ metrics.n_train }} utterances, validated on {{ metrics.n_dev }}.
+        Selected model: <strong>{{ metrics.model_name }}</strong> (chosen over the alternative by lowest EER -
+        see <code>docs/model_comparison.json</code> for the full comparison), decision threshold
+        <strong>{{ "%.3f"|format(metrics.decision_threshold) }}</strong> (not the default 0.5 - see below for why).
+      </p>
+      <table>
+        <tr><th>Metric</th><th>At EER threshold (deployed)</th><th>At default 0.5 threshold</th></tr>
+        <tr><td>Accuracy</td><td>{{ "%.1f"|format(metrics.accuracy_dev * 100) }}%</td><td>{{ "%.1f"|format(metrics['accuracy_dev_default_threshold_0.5'] * 100) }}%</td></tr>
+        <tr><td>Bonafide (human) recall</td><td>{{ "%.1f"|format(metrics.recall_bonafide_dev * 100) }}%</td><td>{{ "%.1f"|format(metrics['recall_bonafide_dev_default_threshold_0.5'] * 100) }}%</td></tr>
+        <tr><td>Spoof (AI) recall</td><td>{{ "%.1f"|format(metrics.recall_dev * 100) }}%</td><td>&mdash;</td></tr>
+        <tr><td>F1 (spoof)</td><td>{{ "%.1f"|format(metrics.f1_dev * 100) }}%</td><td>&mdash;</td></tr>
+        <tr><td>ROC-AUC (threshold-independent)</td><td colspan="2">{{ "%.3f"|format(metrics.roc_auc_dev) }}</td></tr>
+        <tr><td>EER (threshold-independent)</td><td colspan="2">{{ "%.2f"|format(metrics.eer_dev * 100) }}%</td></tr>
+      </table>
+      <p style="margin-bottom: 0; font-size: 0.9rem; color: var(--text-muted);">
+        The default-threshold column shows why threshold matters: bonafide recall at 0.5 is much lower.
+        See <code>docs/EXPLANATION.md</code> for the full accuracy-paradox discussion.
+      </p>
+    </div>
   {% else %}
     <p>No training run recorded yet - run <code>pipeline/train_classifier.py</code>.</p>
   {% endif %}
@@ -20,23 +34,27 @@
 
 <section>
   <h2>Streaming enrichment results</h2>
-  <p>{{ n_predictions }} utterances scored so far by the Kafka streaming consumer.</p>
+  <p>{{ n_predictions }} utterances scored so far by the Kafka streaming consumer, at the deployed model's own threshold.</p>
 
   {% if accuracy_by_attack %}
-    <img src="/static/charts/accuracy_by_attack.png" alt="Accuracy by attack type" class="chart">
-    <table>
-      <tr><th>Attack ID</th><th>Utterances</th><th>Accuracy</th></tr>
-      {% for row in accuracy_by_attack %}
-        <tr><td>{{ row.attack_id }}</td><td>{{ row.count }}</td><td>{{ row.accuracy }}%</td></tr>
-      {% endfor %}
-    </table>
+    <div class="card">
+      <img src="/static/charts/accuracy_by_attack.png" alt="Accuracy by attack type" class="chart">
+      <table>
+        <tr><th>Attack ID</th><th>Utterances</th><th>Accuracy</th></tr>
+        {% for row in accuracy_by_attack %}
+          <tr><td>{{ row.attack_id }}</td><td>{{ row.count }}</td><td>{{ row.accuracy }}%</td></tr>
+        {% endfor %}
+      </table>
+    </div>
   {% else %}
     <p>No streamed predictions yet - run <code>pipeline/kafka_producer.py</code> and
       <code>pipeline/streaming_enrichment.py</code> together.</p>
   {% endif %}
 
   {% if class_balance %}
-    <img src="/static/charts/class_balance.png" alt="Class balance" class="chart">
+    <div class="card">
+      <img src="/static/charts/class_balance.png" alt="Class balance" class="chart">
+    </div>
   {% endif %}
 </section>
 {% endblock %}

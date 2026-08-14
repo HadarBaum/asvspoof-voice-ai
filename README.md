@@ -44,11 +44,16 @@ python -m pipeline.ingest_to_minio --la-root data/sample/LA
 # 2. Spark batch job: features for train+dev -> Parquet + Elasticsearch
 python -m pipeline.batch_feature_extraction --la-root data/sample/LA --partitions train dev --out pipeline/features_train_dev.parquet
 
-# 3. train the classifier
+# 3. train the classifier (compares Random Forest vs Gradient Boosting, keeps the lower-EER one)
 python -m pipeline.train_classifier --features pipeline/features_train_dev.parquet --model-out models/voice_classifier.joblib
 
+# 3b. index acoustic-feature embeddings for the web app's similarity search (any order vs. step 3)
+python -m pipeline.index_embeddings --features pipeline/features_train_dev.parquet
+
 # 4. streaming enrichment - run these two in separate terminals
-python -m pipeline.streaming_enrichment --model models/voice_classifier.joblib
+# (use a new --group-id whenever you swap in a newly-trained model, so the whole
+#  topic gets re-scored from the start instead of resuming from an old offset)
+python -m pipeline.streaming_enrichment --model models/voice_classifier.joblib --group-id asvspoof-streaming-enrichment
 python -m pipeline.kafka_producer --la-root data/sample/LA --limit 200 --delay-seconds 0.1
 
 # 5. generate insights (charts + docs/RESULTS.md) from what's in Elasticsearch
@@ -60,8 +65,12 @@ python -m app.server        # http://localhost:5000
 
 ## Demo
 
-- `http://localhost:5000/classify` — upload a clip, get Human / AI-generated + confidence
-- `http://localhost:5000/dashboard` — live insights from Elasticsearch
+- `http://localhost:5000/classify` — upload a clip *or record one live from your
+  microphone*, get Human / AI-generated + confidence, plus the 5 most acoustically
+  similar training clips (Elasticsearch k-NN search)
+- `http://localhost:5000/dashboard` — live insights from Elasticsearch, including
+  the deployed model's metrics at its EER threshold vs. what the default 0.5
+  threshold would give
 
 ## Repository layout
 

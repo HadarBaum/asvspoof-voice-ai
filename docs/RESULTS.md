@@ -1,38 +1,40 @@
 # Results and insights
 
-Generated from 1165 utterances scored by the streaming enrichment pipeline.
+Generated from 498 utterances scored by the streaming enrichment pipeline.
 
-**Overall streaming detection accuracy: 87.8%**
+*Small sample size - either this ran against the committed synthetic/sample dataset (see `pipeline/dev_generate_synthetic_sample.py`) rather than the full ASVspoof2019 dataset, or the streaming run against the real data was deliberately capped short of the full eval queue (see docs/EXPLANATION.md's streaming trade-off note for why). Either way, treat per-attack-type breakdowns with correspondingly small per-bucket counts as directional, not precise.*
+
+**Overall streaming detection accuracy: 84.9%**
 
 ## Accuracy by attack type
 
 | Attack ID | Utterances | Accuracy |
 |---|---|---|
-| - | 145 | 29.7% |
-| A07 | 81 | 100.0% |
-| A08 | 79 | 100.0% |
-| A09 | 75 | 100.0% |
-| A10 | 75 | 100.0% |
-| A11 | 82 | 100.0% |
-| A12 | 86 | 100.0% |
-| A13 | 88 | 100.0% |
-| A14 | 77 | 100.0% |
-| A15 | 71 | 100.0% |
-| A16 | 95 | 98.9% |
-| A17 | 76 | 56.6% |
-| A18 | 66 | 100.0% |
-| A19 | 69 | 91.3% |
+| - | 59 | 91.5% |
+| A07 | 33 | 100.0% |
+| A08 | 32 | 100.0% |
+| A09 | 31 | 100.0% |
+| A10 | 39 | 100.0% |
+| A11 | 30 | 100.0% |
+| A12 | 38 | 86.8% |
+| A13 | 35 | 100.0% |
+| A14 | 34 | 100.0% |
+| A15 | 31 | 96.8% |
+| A16 | 43 | 83.7% |
+| A17 | 38 | 13.2% |
+| A18 | 30 | 63.3% |
+| A19 | 25 | 48.0% |
 
 ## Confusion matrix (true label -> predicted label counts)
 
 | True \ Predicted | bonafide | spoof |
 |---|---|---|
-| spoof | 40 | 980 |
-| bonafide | 43 | 102 |
+| spoof | 70 | 369 |
+| bonafide | 54 | 5 |
 
 ## Class balance (streamed eval utterances)
 
 | True label | Count |
 |---|---|
-| spoof | 1020 |
-| bonafide | 145 |
+| spoof | 439 |
+| bonafide | 59 |

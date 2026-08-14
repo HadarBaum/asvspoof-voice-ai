@@ -81,6 +81,16 @@ Wraps `elasticsearch-py`. Defines the three indices the project uses and a small
 id field, so re-running a pipeline stage overwrites existing documents instead of
 duplicating them.
 
+### `common/model.py`
+Loads the artifact `pipeline/train_classifier.py` saves - a dict bundling the
+fitted classifier together with its own decision threshold - and exposes one
+`ScoredModel.classify(vector) -> (label, confidence)` method used identically
+by `pipeline/streaming_enrichment.py` and `app/server.py`. Before this existed,
+both of those files independently hardcoded `>= 0.5` as the spoof/bonafide
+cutoff; centralizing it here is what makes the threshold fix in §4 actually
+take effect everywhere at once instead of needing to be repeated (and
+potentially forgotten in one place) at every call site.
+
 ### `common/dataset_layout.py`
 Knows the ASVspoof2019 directory/protocol conventions: given an `LA/` root and a
 partition name, `load_partition()` parses the matching protocol file and returns a
@@ -183,18 +193,27 @@ changes how the small final result gets written to disk.
 
 ### `pipeline/train_classifier.py` — the AI capability, training half
 Loads the Parquet feature table, splits it by the dataset's own `partition` column
-(train vs. dev) — **not** a random split. Trains a `RandomForestClassifier`
-(`class_weight="balanced"`, since spoof clips heavily outnumber bonafide ones in
-ASVspoof2019) on train, evaluates on dev (accuracy/precision/recall/F1 +
-per-feature importances), saves the model with `joblib`, and writes both a local
-metrics JSON and a summary document into Elasticsearch (`asvspoof-training-results`).
+(train vs. dev) — **not** a random split. Trains **two** candidate classifiers on
+the same features - `RandomForestClassifier` and `GradientBoostingClassifier`,
+both reweighted for the train set's spoof/bonafide imbalance (`class_weight`
+for the former, `sample_weight` computed via `compute_sample_weight("balanced",
+...)` for the latter, which has no `class_weight` parameter of its own) -
+evaluates both on dev, and **keeps whichever has the lower EER** (see below for
+why EER, not accuracy, is the selection criterion). The winner's model, its
+name, and its EER-optimal decision threshold are bundled into one artifact via
+`joblib.dump({"model": ..., "model_name": ..., "threshold": ...}, ...)` -
+everything a downstream consumer needs to score a clip correctly, in one file
+(see `common/model.py`).
 
-**Why a Random Forest, not a neural net:** feature importances are directly
-inspectable (which acoustic properties actually separate human from AI speech —
-see `docs/RESULTS.md`), training is fast enough to iterate on a laptop, and a model
-this simple is one the whole team can read `sklearn`'s source for and fully explain
-in Q&A. A CNN over raw spectrograms would likely score higher but would also be a
-much harder thing to defend as "fully understood."
+**Why compare two models instead of committing to one:** feature importances
+stay directly inspectable either way (both are tree ensembles), training is
+fast enough to iterate on a laptop, and both are simple enough for the whole
+team to read `sklearn`'s source for and fully explain in Q&A - a CNN over raw
+spectrograms would likely score higher but be a much harder thing to defend as
+"fully understood." Between the two, a real comparison (see
+`docs/model_comparison.json` for the full numbers) is more defensible than an
+unchallenged single number: on the full-scale run, Gradient Boosting won with
+EER 9.26% vs. Random Forest's 12.31% (ROC-AUC 0.970 vs. 0.951).
 
 **Why the dataset's own train/dev split, not a random one:** a random split could
 put the same speaker's utterances, or utterances from the same attack system, on
@@ -203,10 +222,10 @@ speaker's voice* or *that particular attack's fingerprint* rather than general
 bonafide-vs-spoof cues, inflating dev accuracy in a way that wouldn't generalize.
 ASVspoof2019's speaker-disjoint partitions exist specifically to prevent this.
 
-**What the full-scale run (25,380 train + 24,844 dev utterances) actually found —
-and why accuracy alone would have hidden it:** dev accuracy at the default 0.5
-decision threshold is 92.3%, which sounds strong, but the per-class breakdown tells
-a different story:
+**The accuracy paradox this project actually hit, and how it was fixed (not just
+diagnosed):** the first version of this pipeline evaluated only at scikit-learn's
+default 0.5 decision threshold. Dev accuracy was 92.3%, which sounds strong, but
+the per-class breakdown told a different story:
 
 ```
                   precision    recall  f1-score   support
@@ -214,25 +233,78 @@ bonafide (human)       0.93      0.27      0.42      2548
       spoof (AI)       0.92      1.00      0.96     22296
 ```
 
-The model catches essentially all spoofed speech (99.8% recall) but correctly
-flags only 27% of real human speech as bonafide - it's heavily biased toward
-predicting "spoof." This is the **accuracy paradox**: dev is ~90% spoof, so a
-model that just leans toward the majority class scores well on accuracy while
-failing the minority class. `class_weight="balanced"` reweights the *training*
-loss, but it doesn't change the *default 0.5 threshold* `predict()` applies at
-evaluation time - the two are different levers, and only fixing one isn't enough.
+The model caught essentially all spoofed speech (99.8% recall) but correctly
+flagged only 27% of real human speech as bonafide - heavily biased toward
+predicting "spoof." Dev is ~90% spoof, so a model that just leans toward the
+majority class scores well on accuracy while failing the minority class.
+`class_weight`/`sample_weight` reweight the *training* loss, but that doesn't
+change the *default 0.5 threshold* `.predict()` applies at evaluation time -
+the two are different levers, and fixing only one isn't enough.
 
-This is exactly why the training script also reports **ROC-AUC (0.969)** and
-**EER (9.09%)** — both threshold-independent, and EER specifically is the metric
-the official ASVspoof challenge itself is scored on (see `equal_error_rate()` in
-this file). A 9% EER means the underlying probability scores separate the two
-classes reasonably well (consistent with the strong ROC-AUC); the poor recall
-above is a threshold-placement problem on top of a genuinely OK-scoring model,
-not evidence the features carry no signal. A natural next step - noted here
-rather than implemented, to keep the submission's scope honest about what was
-and wasn't done - would be to move the decision threshold to the EER operating
-point instead of 0.5, which would trade some spoof recall for much better
-bonafide recall.
+This is exactly why the training script also reports **ROC-AUC** and **EER**
+(`compute_eer()` in this file) - both threshold-independent, and EER specifically
+is the metric the official ASVspoof challenge itself is scored on. A ~9% EER
+means the underlying probability scores separate the two classes reasonably
+well; the poor recall above was a threshold-*placement* problem on top of an
+already reasonably-scoring model, not evidence the features carried no signal.
+`compute_eer()` returns not just the error rate but the **score threshold** at
+that operating point, and the model artifact now stores it and uses it instead
+of 0.5. The result, re-measured on the same dev set with the winning Gradient
+Boosting model at its own EER threshold (0.689, not 0.5):
+
+```
+                  precision    recall  f1-score   support
+bonafide (human)       0.53      0.91      0.67      2548
+      spoof (AI)       0.99      0.91      0.95     22296
+```
+
+Bonafide recall: 27% → 91%. Precision on bonafide dropped (0.93 → 0.53) - the
+model now calls more things bonafide, including some spoof clips it used to
+catch - which is the real trade-off EER makes explicit rather than hiding: you
+cannot maximize both classes' accuracy simultaneously on an imbalanced problem,
+you can only choose *which* trade-off point on the ROC curve to operate at. EER
+picks the point where both error types are equal, which is a principled default
+rather than the arbitrary default of 0.5. This was re-confirmed independently on
+the live Kafka streaming run against real held-out eval data, not just recomputed
+on the same dev set the threshold was chosen from - see the streaming section
+below and `docs/RESULTS.md`.
+
+### `pipeline/index_embeddings.py` — the AI capability, semantic search half
+Builds the "embeddings and semantic search" option from the course brief
+(§6.2b), reusing the *same* acoustic feature vectors already computed for the
+classifier as the embedding, rather than introducing a separate embedding
+model. Raw features span wildly different scales (`duration_seconds` ~1-10 vs.
+`spectral_rolloff` in the thousands), so cosine similarity over them unscaled
+would just be dominated by whichever feature has the largest absolute
+magnitude - the script fits a `StandardScaler` on train (zero mean, unit
+variance per feature), stores it (`models/embedding_scaler.joblib`) so
+`app/server.py` can standardize a freshly-uploaded clip's features the exact
+same way, and writes the standardized vectors into a `dense_vector` field
+(`embedding`, cosine similarity) on the already-existing
+`asvspoof-training-features` index via a partial `_op_type: update` bulk
+request - not a full reindex, since the raw feature columns
+`batch_feature_extraction.py` already wrote for each document don't need to
+change.
+
+**Why add the field to an already-existing index instead of recreating it:**
+this index already held 50,224 real, expensively-computed documents from the
+batch job by the time embeddings were added. Elasticsearch allows adding a new
+field to an existing mapping in place (`common.es_client.ensure_embedding_mapping()`,
+a `put_mapping` call) as long as the field doesn't already exist under a
+conflicting type - no reindex, no reprocessing, no re-running Spark.
+
+`app/server.py`'s `/classify` route calls this same standardization + a
+`knn` search (`k=5`, `num_candidates=100`) against this index after every
+classification, surfacing the 5 most acoustically similar training clips -
+this is nearest-neighbor semantic search replacing a keyword match, directly
+built on the Elasticsearch topic from the course.
+
+### `pipeline/train_classifier.py` and `pipeline/index_embeddings.py` — order of operations
+`index_embeddings.py` reads the *same* Parquet feature table
+`batch_feature_extraction.py` produced and `train_classifier.py` trains on, so
+it can run any time after the batch job (independently of, before, or after
+training) - it doesn't depend on the trained model at all, only on the raw
+features.
 
 ### `pipeline/kafka_producer.py` + `pipeline/streaming_enrichment.py` — the AI capability, streaming half
 `kafka_producer.py` replays the eval partition's utterance metadata (MinIO key +
@@ -247,29 +319,51 @@ whether it matched the known true label, a timestamp) into Elasticsearch
 (`asvspoof-predictions`) — one document per utterance, as it's scored, not in a
 batch after the fact.
 
-**On the full-scale run, the streaming demo processed 1,165 of the 5,000 eval
-utterances queued, not all 5,000.** The Kafka producer/consumer pair itself
-worked correctly throughout - every message that was consumed was fetched,
-scored, and written to Elasticsearch with no errors - but consumer throughput
-on this machine was, unpredictably, far below what standalone benchmarking of
-the same `extract_features` + `predict_proba` call chain measured (roughly
-0.1-0.3s/utterance in isolation vs. an effective multi-second/utterance rate
-under sustained background execution). The batch Spark job hit the same kind
-of unpredictable slowdown earlier in this run and eventually pushed through it;
-the streaming step was capped at 1,165 scored utterances - still enough to
-cover every attack type in eval (see `docs/RESULTS.md`) - rather than spend
-several more hours on what is a secondary demonstration of an AI capability
-already fully validated by the batch training run above. The root cause was
-never conclusively identified; the leading candidate is Windows throttling
+**On both full-scale runs, the streaming demo processed a capped subset of the
+5,000 eval utterances queued, not all 5,000** (1,165 with the original Random
+Forest + 0.5-threshold model; 498 after switching to the Gradient Boosting +
+EER-threshold model, which needed a fresh consumer group - see below - to
+re-score from the start of the topic). The Kafka producer/consumer pair itself
+worked correctly throughout both runs - every message that was consumed was
+fetched, scored, and written to Elasticsearch with no errors - but consumer
+throughput on this machine was, unpredictably, far below what standalone
+benchmarking of the same `extract_features` + `predict_proba` call chain
+measured (roughly 0.1-0.3s/utterance in isolation vs. an effective
+multi-second/utterance rate under sustained background execution). The batch
+Spark job hit the same kind of unpredictable slowdown and eventually pushed
+through it; the streaming step was capped both times rather than spend several
+more hours on what is a secondary demonstration of an AI capability already
+fully validated by the batch training run above. The root cause was never
+conclusively identified; the leading candidate is Windows throttling
 long-running background console processes, though this was never proven.
 
-The consumer joins a named consumer group (`asvspoof-streaming-enrichment`) with
-auto-commit enabled, so Kafka tracks how far it's read. Without a group id, every
-run would start from the earliest offset and re-score every message ever
-published to the topic (this is exactly what happened during testing — a first
-run scored 20 utterances, and re-running without a group id scored the same 20
-again instead of picking up only new ones). With the group id in place, a second
-run against an unchanged topic correctly scores zero new utterances.
+**The second (498-utterance) run independently confirms the threshold fix
+worked - not just on the dev set the threshold was chosen from, but on live,
+never-trained-on eval data streamed through Kafka:** bonafide accuracy on the
+"-" (bonafide) row in `docs/RESULTS.md` went from 29.7% (Random Forest, 0.5
+threshold) to 91.5% (Gradient Boosting, EER threshold) - matching the dev-set
+improvement almost exactly. The trade-off shows up too: a handful of the
+harder/later attack IDs (A17, A18, A19) score noticeably worse than they did
+under the old model (e.g. A17 dropped from 56.6% to 13.2%) - the new threshold
+buys bonafide recall by giving up some margin on the spoof attacks whose scores
+sit closest to the bonafide range. This is a real, worthwhile trade to make
+(catching genuine human speech reliably matters more than catching every
+attack variant), but it is a trade, not a strict improvement, and is reported
+here rather than only showing the metric that improved.
+
+The consumer joins a named consumer group (`--group-id`, default
+`asvspoof-streaming-enrichment`) with auto-commit enabled, so Kafka tracks how
+far it's read. Without a group id, every run would start from the earliest
+offset and re-score every message ever published to the topic (this is exactly
+what happened during early testing — a first run scored 20 utterances, and
+re-running without a group id scored the same 20 again instead of picking up
+only new ones). With a group id in place, a second run against an *unchanged*
+model resumes correctly and scores zero new utterances - but that's also
+exactly why switching models required passing a **new** `--group-id`
+(`asvspoof-streaming-enrichment-gb`): reusing the old group would have resumed
+from its committed offset and only scored the ~3,800 *remaining* messages with
+the new model, mixing old-model and new-model predictions in the same
+comparison. A fresh group name re-reads the topic from the beginning instead.
 
 **Why a plain Python Kafka consumer, not Spark Structured Streaming:** Spark's job
 in this project is the batch feature-extraction step, where parallelizing tens of
@@ -291,16 +385,45 @@ full-scale) and re-running this script always reflects the actual data.
 
 `app/server.py` is a small Flask app with three routes:
 - `/` — links/overview.
-- `/classify` — accepts an uploaded audio file, runs it through
-  `common.features.extract_features` and the same saved model the pipeline trains,
-  returns "Human" or "AI-generated" + confidence. This is the same code path as
-  `streaming_enrichment.py`, just triggered by an HTTP upload instead of a Kafka
-  message.
+- `/classify` — accepts an uploaded audio file **or a live microphone
+  recording** (see below), runs it through `common.features.extract_features`
+  and the same saved model the pipeline trains (via `common.model.load_model`),
+  returns "Human" or "AI-generated" + confidence, and additionally runs
+  `find_similar_clips()` - the same standardization + Elasticsearch `knn`
+  search `pipeline/index_embeddings.py` set up - to show the 5 most
+  acoustically similar training clips. Classification is the same code path as
+  `streaming_enrichment.py`, just triggered by an HTTP upload instead of a
+  Kafka message; the similarity search never blocks the main result if it
+  fails (wrapped in its own try/except), since it's a bonus, not the core
+  answer.
 - `/dashboard` — runs the same style of Elasticsearch aggregations as
-  `pipeline/insights.py`, live, so the page always reflects current pipeline state.
+  `pipeline/insights.py`, live, so the page always reflects current pipeline
+  state, plus a side-by-side table of the deployed model's metrics at its EER
+  threshold vs. what the default 0.5 threshold would have given - the
+  accuracy-paradox comparison made concrete on the same page a grader would
+  look at first.
 
-No JavaScript build step, no Node — server-rendered Jinja2 templates
-(`app/templates/`) and a small hand-written stylesheet (`app/static/style.css`).
+No JavaScript build step, no Node, no external CDN dependency — server-rendered
+Jinja2 templates (`app/templates/`) and a small hand-written stylesheet
+(`app/static/style.css`).
+
+**Live microphone recording (`classify.html`'s inline `<script>`):** clicking
+"Start recording" calls `navigator.mediaDevices.getUserMedia({audio: true})`,
+then pipes the stream through a `ScriptProcessorNode` to capture raw Float32
+PCM samples directly (rather than `MediaRecorder`, whose default output on
+most browsers is Opus-encoded WebM/Ogg - a codec `librosa`/`soundfile` can't
+reliably decode without a system `ffmpeg` install). On "Stop," the captured
+samples are hand-encoded into a 16-bit PCM WAV file client-side (a ~40-line
+vanilla-JS WAV header writer - no library), wrapped in a `File`, attached to
+the existing file `<input>` via the `DataTransfer` API, and the *same*
+multipart form is submitted normally. This means the server-side `/classify`
+handler needed zero changes to support live recording - as far as Flask is
+concerned, a recorded clip and an uploaded file are indistinguishable, both
+arriving as a normal `multipart/form-data` upload. `ScriptProcessorNode` is
+deprecated in favor of `AudioWorklet`, but the latter requires loading a
+separate worklet module file; `ScriptProcessorNode` needed no extra file and
+works in every current browser, which mattered more here than avoiding a
+deprecation warning.
 
 ## 6. Infrastructure — `docker-compose.yml`
 
@@ -326,7 +449,7 @@ being a legitimate, standard way to use Spark for a project this size.
 |---|---|
 | Data and pipeline (25%) | `pipeline/ingest_to_minio.py` → `batch_feature_extraction.py` → Parquet/Elasticsearch is a real ETL pipeline over unstructured audio data |
 | Use of course technologies (20%) | Object store (MinIO), streaming (Kafka), NoSQL (Elasticsearch), Spark, Docker — five course technologies, each with a clear, non-decorative role |
-| AI capability (25%) | A trained classifier (§6.2f) operating on the data, applied in both batch validation and streaming enrichment (§6.2e-style) — not a bolted-on separate feature |
+| AI capability (25%) | Two AI capabilities from the brief, both operating on the data itself: (f) a compared/selected classifier (Random Forest vs. Gradient Boosting, picked by EER) applied in both batch validation and streaming enrichment (§6.2e-style); and (b) embeddings + Elasticsearch k-NN semantic search over the same acoustic features — not bolted-on separate features, all sharing one feature-extraction implementation |
 | Results and insights (15%) | `docs/RESULTS.md`, generated by live Elasticsearch aggregations in `pipeline/insights.py` |
 | Presentation and demo (10%) | `docs/slides/generate_slides.py` builds the deck; `/classify` and `/dashboard` are the live demo |
 | Understanding and Q&A (5%) | This document — every component's purpose and the trade-offs behind it, in plain language |
@@ -334,8 +457,9 @@ being a legitimate, standard way to use Spark for a project this size.
 ## 8. How to reproduce
 
 See `README.md` for exact commands. Short version: `docker compose up -d`, then run
-`pipeline/ingest_to_minio.py` → `batch_feature_extraction.py` → `train_classifier.py`
-→ (`kafka_producer.py` + `streaming_enrichment.py` together) → `insights.py`, then
-`python -m app.server`. Every step accepts `--la-root data/sample/LA` (the committed
-synthetic sample, no download needed) or `--la-root data/raw/LA` (the real dataset,
-after `pipeline/download_dataset.py`).
+`pipeline/ingest_to_minio.py` → `batch_feature_extraction.py` →
+(`train_classifier.py` and `index_embeddings.py`, either order - both only need
+the Parquet feature table) → (`kafka_producer.py` + `streaming_enrichment.py`
+together) → `insights.py`, then `python -m app.server`. Every step accepts
+`--la-root data/sample/LA` (the committed synthetic sample, no download needed)
+or `--la-root data/raw/LA` (the real dataset, after `pipeline/download_dataset.py`).
