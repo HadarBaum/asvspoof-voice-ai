@@ -45,11 +45,16 @@
         <tr><td>ROC-AUC (threshold-independent)</td><td colspan="2">{{ "%.3f"|format(metrics.roc_auc_dev) }}</td></tr>
         <tr><td>EER (threshold-independent)</td><td colspan="2">{{ "%.2f"|format(metrics.eer_dev * 100) }}%</td></tr>
       </table>
-      <p style="margin-bottom: 0; font-size: 0.85rem; color: var(--text-muted);">
+      <p style="font-size: 0.85rem; color: var(--text-muted);">
         Notice bonafide recall jumps at the EER threshold while spoof recall drops a little - that's the
         trade-off being made deliberately, not a free improvement: there's no single threshold that
-        maximizes both at once on an imbalanced dataset.
+        maximizes both at once on an imbalanced dataset. The ROC curve below shows this as a literal
+        curve: every point on it is a different threshold choice, and the marked point is the one deployed.
       </p>
+      <div class="chart-grid">
+        <img src="/static/charts/roc_curve.png" alt="ROC curve with EER point marked" class="chart">
+        <img src="/static/charts/feature_importance.png" alt="Top feature importances" class="chart">
+      </div>
     </div>
   {% else %}
     <p>No training run recorded yet - run <code>pipeline/train_classifier.py</code>.</p>
@@ -77,7 +82,16 @@
 
   {% if class_balance %}
     <div class="card">
-      <img src="/static/charts/class_balance.png" alt="Class balance" class="chart">
+      <div class="chart-grid">
+        <img src="/static/charts/class_balance.png" alt="Class balance" class="chart">
+        <img src="/static/charts/confusion_matrix.png" alt="Confusion matrix" class="chart">
+      </div>
+      <img src="/static/charts/confidence_histogram.png" alt="Confidence distribution, correct vs incorrect" class="chart">
+      <p style="margin-bottom: 0; font-size: 0.85rem; color: var(--text-muted);">
+        A well-calibrated model should show incorrect predictions clustered at lower confidence than
+        correct ones - if the two overlap heavily, the model is confidently wrong just as often as
+        confidently right, which would be a red flag this chart makes visible at a glance.
+      </p>
     </div>
   {% endif %}
 </section>

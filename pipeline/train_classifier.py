@@ -30,6 +30,10 @@ import os
 from datetime import datetime, timezone
 
 import joblib
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
@@ -47,6 +51,8 @@ from sklearn.utils.class_weight import compute_sample_weight
 from common import es_client
 from common.features import FEATURE_NAMES
 
+CHARTS_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "static", "charts")
+
 
 def compute_eer(y_true_spoof, y_score_spoof):
     """The standard ASVspoof challenge metric: the point on the ROC curve where
@@ -55,17 +61,23 @@ def compute_eer(y_true_spoof, y_score_spoof):
     here than raw accuracy, which - as this project's own numbers show - can
     look good while quietly missing most of the minority (bonafide) class.
 
-    Returns (eer, threshold): `threshold` is the P(spoof) score above which a
-    clip should be called spoof to actually operate at that equal-error point
-    - unlike EER itself, this is something downstream code can act on, since
+    Returns a dict with the error rate, the P(spoof) score threshold that
+    achieves it (since EER itself isn't something downstream code can act on -
     scikit-learn's default `.predict()` always uses a fixed 0.5 threshold
-    regardless of the training class weights.
+    regardless of training class weights), and the full ROC curve arrays so
+    callers can plot it without recomputing.
     """
     fpr, tpr, thresholds = roc_curve(y_true_spoof, y_score_spoof)
     fnr = 1 - tpr
     eer_idx = np.nanargmin(np.abs(fnr - fpr))
     eer = float((fpr[eer_idx] + fnr[eer_idx]) / 2.0)
-    return eer, float(thresholds[eer_idx])
+    return {
+        "eer": eer,
+        "threshold": float(thresholds[eer_idx]),
+        "fpr": fpr,
+        "tpr": tpr,
+        "eer_idx": int(eer_idx),
+    }
 
 
 def evaluate_at_threshold(y_dev, y_proba_spoof, threshold):
@@ -123,11 +135,15 @@ def main():
         fitted[name] = clf
 
         y_proba = clf.predict_proba(X_dev)[:, 1]
-        eer, eer_threshold = compute_eer(y_dev, y_proba)
+        eer_result = compute_eer(y_dev, y_proba)
+        eer, eer_threshold = eer_result["eer"], eer_result["threshold"]
         comparison[name] = {
             "roc_auc": roc_auc_score(y_dev, y_proba),
             "eer": eer,
             "eer_threshold": eer_threshold,
+            "roc_fpr": eer_result["fpr"],
+            "roc_tpr": eer_result["tpr"],
+            "roc_eer_idx": eer_result["eer_idx"],
             # at the default 0.5 threshold scikit-learn's own .predict() would use -
             # kept to make the accuracy-paradox comparison concrete per model
             "at_default_threshold_0.5": evaluate_at_threshold(y_dev, y_proba, 0.5),
@@ -153,6 +169,40 @@ def main():
         print("Top 10 most important features:")
         for name, importance in feature_importance:
             print(f"  {name}: {importance:.4f}")
+
+    os.makedirs(CHARTS_DIR, exist_ok=True)
+
+    # --- ROC curve, both candidates, EER point marked on the deployed model ---
+    plt.figure(figsize=(5, 5))
+    for name in comparison:
+        style = "-" if name == best_name else "--"
+        plt.plot(
+            comparison[name]["roc_fpr"],
+            comparison[name]["roc_tpr"],
+            style,
+            label=f"{name.replace('_', ' ').title()} (AUC={comparison[name]['roc_auc']:.3f})",
+        )
+    idx = best["roc_eer_idx"]
+    plt.plot(best["roc_fpr"][idx], best["roc_tpr"][idx], "ko", markersize=8, label=f"EER = {best['eer']:.1%}")
+    plt.plot([0, 1], [0, 1], ":", color="gray", linewidth=1)
+    plt.xlabel("False positive rate (bonafide called spoof)")
+    plt.ylabel("True positive rate (spoof caught)")
+    plt.title("ROC curve - deployed model's EER point marked")
+    plt.legend(loc="lower right", fontsize=8)
+    plt.tight_layout()
+    plt.savefig(os.path.join(CHARTS_DIR, "roc_curve.png"), dpi=120)
+    plt.close()
+
+    # --- feature importance, the deployed model only ---
+    if feature_importance:
+        names, importances = zip(*reversed(feature_importance))
+        plt.figure(figsize=(6, 4))
+        plt.barh(names, importances, color="#4C72B0")
+        plt.xlabel("Importance")
+        plt.title(f"Top 10 features - {best_name.replace('_', ' ').title()}")
+        plt.tight_layout()
+        plt.savefig(os.path.join(CHARTS_DIR, "feature_importance.png"), dpi=120)
+        plt.close()
 
     os.makedirs(os.path.dirname(args.model_out), exist_ok=True)
     # Bundle the model with its own decision threshold so nothing downstream
@@ -186,8 +236,15 @@ def main():
     with open(args.metrics_out, "w") as f:
         json.dump({**metrics, "top_features": feature_importance}, f, indent=2)
 
+    # roc_fpr/roc_tpr are numpy arrays kept around only to plot the ROC curve
+    # above - not JSON-serializable, and not useful in a hand-readable
+    # comparison file, so they're dropped before writing it out.
+    json_safe_comparison = {
+        name: {k: v for k, v in c.items() if k not in ("roc_fpr", "roc_tpr", "roc_eer_idx")}
+        for name, c in comparison.items()
+    }
     with open(args.comparison_out, "w") as f:
-        json.dump({"selected": best_name, "candidates": comparison}, f, indent=2)
+        json.dump({"selected": best_name, "candidates": json_safe_comparison}, f, indent=2)
     print(f"Wrote model comparison to {args.comparison_out}")
 
     es = es_client.get_client()

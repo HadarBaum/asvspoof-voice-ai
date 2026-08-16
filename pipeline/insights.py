@@ -18,6 +18,7 @@ import matplotlib
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import numpy as np
 
 from common import es_client
 
@@ -88,6 +89,53 @@ def main():
     plt.title("Streamed utterances by true label")
     plt.tight_layout()
     plt.savefig(os.path.join(CHARTS_DIR, "class_balance.png"), dpi=120)
+    plt.close()
+
+    # --- confusion matrix heatmap ------------------------------------------
+    labels = ["bonafide", "spoof"]
+    matrix = np.zeros((2, 2), dtype=int)  # rows = true label, cols = predicted label
+    for true_bucket in confusion:
+        true_idx = labels.index(true_bucket["key"])
+        for pred_bucket in true_bucket["by_pred"]["buckets"]:
+            if pred_bucket["key"] in labels:
+                matrix[true_idx, labels.index(pred_bucket["key"])] = pred_bucket["doc_count"]
+
+    plt.figure(figsize=(4, 4))
+    plt.imshow(matrix, cmap="Blues")
+    plt.xticks([0, 1], labels)
+    plt.yticks([0, 1], labels)
+    plt.xlabel("Predicted")
+    plt.ylabel("True")
+    plt.title("Confusion matrix (streamed predictions)")
+    for i in range(2):
+        for j in range(2):
+            color = "white" if matrix[i, j] > matrix.max() / 2 else "black"
+            plt.text(j, i, str(matrix[i, j]), ha="center", va="center", color=color, fontsize=13)
+    plt.colorbar(fraction=0.046, pad=0.04)
+    plt.tight_layout()
+    plt.savefig(os.path.join(CHARTS_DIR, "confusion_matrix.png"), dpi=120)
+    plt.close()
+
+    # --- confidence histogram, correct vs incorrect predictions ------------
+    conf_hits = es.search(
+        index=es_client.PREDICTIONS_INDEX,
+        size=min(n_predictions, 10000),
+        source=["confidence", "correct"],
+        query={"match_all": {}},
+    )["hits"]["hits"]
+    correct_conf = [h["_source"]["confidence"] for h in conf_hits if h["_source"]["correct"]]
+    incorrect_conf = [h["_source"]["confidence"] for h in conf_hits if not h["_source"]["correct"]]
+
+    plt.figure(figsize=(6, 4))
+    bins = np.linspace(0.5, 1.0, 21)  # confidence is always >= 0.5 by construction (see common/model.py)
+    plt.hist(correct_conf, bins=bins, alpha=0.7, label=f"Correct (n={len(correct_conf)})", color="#55A868")
+    plt.hist(incorrect_conf, bins=bins, alpha=0.7, label=f"Incorrect (n={len(incorrect_conf)})", color="#C44E52")
+    plt.xlabel("Model confidence")
+    plt.ylabel("Utterances")
+    plt.title("Confidence distribution: correct vs. incorrect predictions")
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(os.path.join(CHARTS_DIR, "confidence_histogram.png"), dpi=120)
     plt.close()
 
     # --- markdown report ----------------------------------------------------

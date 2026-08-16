@@ -173,6 +173,17 @@ tr:nth-child(even) td { background: #fafbfc; }
 
 .chart { max-width: 100%; margin: 1rem 0; border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); }
 
+.chart-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  align-items: start;
+}
+.chart-grid .chart { margin: 0; width: 100%; }
+@media (max-width: 640px) {
+  .chart-grid { grid-template-columns: 1fr; }
+}
+
 section { margin-bottom: 2.5rem; }
 
 .similar-list {
