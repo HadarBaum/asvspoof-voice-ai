@@ -20,11 +20,11 @@ import os
 import sys
 
 import joblib
-from flask import Flask, render_template, request
+from flask import Flask, Response, render_template, request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from common import es_client  # noqa: E402
+from common import es_client, minio_client  # noqa: E402
 from common.features import extract_features, features_to_vector  # noqa: E402
 from common.model import load_model  # noqa: E402
 
@@ -33,6 +33,7 @@ SCALER_PATH = os.environ.get(
     "SCALER_PATH", os.path.join(os.path.dirname(__file__), "..", "models", "embedding_scaler.joblib")
 )
 METRICS_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "training_metrics.json")
+COMPARISON_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "model_comparison.json")
 
 app = Flask(__name__)
 _model = None
@@ -66,7 +67,8 @@ def find_similar_clips(vector, k=5):
     )
     return [
         {
-            "key": hit["_source"]["key"].rsplit("/", 1)[-1],
+            "key": hit["_source"]["key"],  # full MinIO object key, used by /audio/<key> to fetch and play it back
+            "display_name": hit["_source"]["key"].rsplit("/", 1)[-1],
             "label": "AI-generated" if hit["_source"]["label"] == "spoof" else "Human",
             "attack_id": hit["_source"]["attack_id"],
             "partition": hit["_source"]["partition"],
@@ -108,6 +110,20 @@ def classify():
     return render_template("classify.html", result=result, error=error)
 
 
+@app.route("/audio/<path:key>")
+def audio(key):
+    """Streams a training clip straight out of MinIO by its object key, so the
+    similar-clips list on /classify can be played back in the browser - the
+    audience hears what "acoustically similar" actually means, not just a
+    similarity score."""
+    try:
+        client = minio_client.get_client()
+        audio_bytes = minio_client.get_object_bytes(client, key)
+        return Response(audio_bytes, mimetype="audio/flac")
+    except Exception:  # noqa: BLE001
+        return "Clip not found", 404
+
+
 @app.route("/dashboard")
 def dashboard():
     es = es_client.get_client()
@@ -115,6 +131,11 @@ def dashboard():
     if os.path.exists(METRICS_PATH):
         with open(METRICS_PATH) as f:
             metrics = json.load(f)
+
+    comparison = None
+    if os.path.exists(COMPARISON_PATH):
+        with open(COMPARISON_PATH) as f:
+            comparison = json.load(f)
 
     n_predictions = 0
     accuracy_by_attack = []
@@ -147,6 +168,7 @@ def dashboard():
     return render_template(
         "dashboard.html",
         metrics=metrics,
+        comparison=comparison,
         n_predictions=n_predictions,
         accuracy_by_attack=accuracy_by_attack,
         class_balance=class_balance,

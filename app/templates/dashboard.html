@@ -8,23 +8,47 @@
   {% if metrics %}
     <div class="card">
       <p style="margin-top: 0;">
-        Trained on {{ metrics.n_train }} utterances, validated on {{ metrics.n_dev }}.
-        Selected model: <strong>{{ metrics.model_name }}</strong> (chosen over the alternative by lowest EER -
-        see <code>docs/model_comparison.json</code> for the full comparison), decision threshold
-        <strong>{{ "%.3f"|format(metrics.decision_threshold) }}</strong> (not the default 0.5 - see below for why).
+        Trained on {{ metrics.n_train }} utterances, validated on {{ metrics.n_dev }}. Two models were
+        trained and compared below; the one with the lower error rate is deployed, scoring clips at its
+        own decision threshold (<strong>{{ "%.3f"|format(metrics.decision_threshold) }}</strong>) instead
+        of the usual default of 0.5 - see the explanation underneath the next table for why that matters.
+      </p>
+
+      {% if comparison %}
+      <table>
+        <tr><th>Model</th><th>EER (lower is better)</th><th>ROC-AUC</th><th>Bonafide recall @ its own EER threshold</th></tr>
+        {% for name, c in comparison.candidates.items() %}
+          <tr>
+            <td>{{ name.replace('_', ' ').title() }}{% if name == comparison.selected %} &mdash; <strong>deployed</strong>{% endif %}</td>
+            <td>{{ "%.2f"|format(c.eer * 100) }}%</td>
+            <td>{{ "%.3f"|format(c.roc_auc) }}</td>
+            <td>{{ "%.1f"|format(c.at_eer_threshold.recall_bonafide * 100) }}%</td>
+          </tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+
+      <p style="font-size: 0.9rem; color: var(--text-muted);">
+        <strong>Why the decision threshold matters:</strong> on this dataset spoof clips outnumber bonafide
+        (human) ones roughly 9-to-1. A model can score high on overall accuracy while quietly failing almost
+        all bonafide clips, simply by leaning toward the majority class - the table below shows this
+        actually happening at the usual default threshold of 0.5. EER (the metric the ASVspoof challenge
+        itself is scored on) picks the threshold where both error types are balanced instead, which is
+        why it's used here instead of 0.5.
       </p>
       <table>
         <tr><th>Metric</th><th>At EER threshold (deployed)</th><th>At default 0.5 threshold</th></tr>
         <tr><td>Accuracy</td><td>{{ "%.1f"|format(metrics.accuracy_dev * 100) }}%</td><td>{{ "%.1f"|format(metrics['accuracy_dev_default_threshold_0.5'] * 100) }}%</td></tr>
         <tr><td>Bonafide (human) recall</td><td>{{ "%.1f"|format(metrics.recall_bonafide_dev * 100) }}%</td><td>{{ "%.1f"|format(metrics['recall_bonafide_dev_default_threshold_0.5'] * 100) }}%</td></tr>
-        <tr><td>Spoof (AI) recall</td><td>{{ "%.1f"|format(metrics.recall_dev * 100) }}%</td><td>&mdash;</td></tr>
-        <tr><td>F1 (spoof)</td><td>{{ "%.1f"|format(metrics.f1_dev * 100) }}%</td><td>&mdash;</td></tr>
+        <tr><td>Spoof (AI) recall</td><td>{{ "%.1f"|format(metrics.recall_dev * 100) }}%</td><td>{{ "%.1f"|format(metrics['recall_dev_default_threshold_0.5'] * 100) }}%</td></tr>
+        <tr><td>F1 (spoof)</td><td>{{ "%.1f"|format(metrics.f1_dev * 100) }}%</td><td>{{ "%.1f"|format(metrics['f1_dev_default_threshold_0.5'] * 100) }}%</td></tr>
         <tr><td>ROC-AUC (threshold-independent)</td><td colspan="2">{{ "%.3f"|format(metrics.roc_auc_dev) }}</td></tr>
         <tr><td>EER (threshold-independent)</td><td colspan="2">{{ "%.2f"|format(metrics.eer_dev * 100) }}%</td></tr>
       </table>
-      <p style="margin-bottom: 0; font-size: 0.9rem; color: var(--text-muted);">
-        The default-threshold column shows why threshold matters: bonafide recall at 0.5 is much lower.
-        See <code>docs/EXPLANATION.md</code> for the full accuracy-paradox discussion.
+      <p style="margin-bottom: 0; font-size: 0.85rem; color: var(--text-muted);">
+        Notice bonafide recall jumps at the EER threshold while spoof recall drops a little - that's the
+        trade-off being made deliberately, not a free improvement: there's no single threshold that
+        maximizes both at once on an imbalanced dataset.
       </p>
     </div>
   {% else %}

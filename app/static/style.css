@@ -184,13 +184,26 @@ section { margin-bottom: 2.5rem; }
 }
 .similar-list li {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
+  gap: 0.6rem;
   padding: 0.6rem 0.9rem;
   background: #f8fafc;
   border: 1px solid var(--border);
   border-radius: 8px;
   font-size: 0.9rem;
+}
+.similar-info {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.similar-score { color: var(--text-muted); font-size: 0.85rem; }
+.similar-list audio {
+  height: 32px;
+  max-width: 220px;
 }
 .similar-list .tag {
   font-size: 0.78rem;

@@ -174,10 +174,12 @@ def main():
         "recall_dev": best["at_eer_threshold"]["recall_spoof"],
         "recall_bonafide_dev": best["at_eer_threshold"]["recall_bonafide"],
         "f1_dev": best["at_eer_threshold"]["f1_spoof"],
-        # kept so the accuracy-paradox story (see docs/EXPLANATION.md) stays
-        # backed by real numbers even after the threshold fix is applied
+        # kept so the accuracy-paradox story stays backed by real numbers even
+        # after the threshold fix is applied (see the dashboard's comparison table)
         "accuracy_dev_default_threshold_0.5": best["at_default_threshold_0.5"]["accuracy"],
         "recall_bonafide_dev_default_threshold_0.5": best["at_default_threshold_0.5"]["recall_bonafide"],
+        "recall_dev_default_threshold_0.5": best["at_default_threshold_0.5"]["recall_spoof"],
+        "f1_dev_default_threshold_0.5": best["at_default_threshold_0.5"]["f1_spoof"],
     }
 
     os.makedirs(os.path.dirname(args.metrics_out), exist_ok=True)

@@ -48,8 +48,12 @@
     <ul class="similar-list">
       {% for clip in result.similar %}
         <li>
-          <span><code>{{ clip.key }}</code> <span class="tag {{ 'spoof' if clip.label == 'AI-generated' else 'human' }}">{{ clip.label }}</span></span>
-          <span>similarity {{ clip.similarity }}</span>
+          <div class="similar-info">
+            <code>{{ clip.display_name }}</code>
+            <span class="tag {{ 'spoof' if clip.label == 'AI-generated' else 'human' }}">{{ clip.label }}</span>
+            <span class="similar-score">similarity {{ clip.similarity }}</span>
+          </div>
+          <audio controls preload="none" src="/audio/{{ clip.key }}"></audio>
         </li>
       {% endfor %}
     </ul>

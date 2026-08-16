@@ -1,6 +1,6 @@
 {
-  "run_id": "20260814T153713Z",
-  "trained_at": "2026-08-14T15:37:13.177097+00:00",
+  "run_id": "20260816T172310Z",
+  "trained_at": "2026-08-16T17:23:10.609115+00:00",
   "n_train": 25380,
   "n_dev": 24844,
   "model_name": "gradient_boosting",
@@ -14,6 +14,8 @@
   "f1_dev": 0.946167157756887,
   "accuracy_dev_default_threshold_0.5": 0.9428835936242151,
   "recall_bonafide_dev_default_threshold_0.5": 0.8018053375196232,
+  "recall_dev_default_threshold_0.5": 0.9590060997488339,
+  "f1_dev_default_threshold_0.5": 0.9678835751307063,
   "top_features": [
     [
       "mfcc_3_std",

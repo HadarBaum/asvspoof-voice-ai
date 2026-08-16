@@ -69,6 +69,8 @@ _RESULTS_FIELDS = {
     "recall_bonafide_dev": {"type": "float"},
     "accuracy_dev_default_threshold_0.5": {"type": "float"},
     "recall_bonafide_dev_default_threshold_0.5": {"type": "float"},
+    "recall_dev_default_threshold_0.5": {"type": "float"},
+    "f1_dev_default_threshold_0.5": {"type": "float"},
 }
 
 
