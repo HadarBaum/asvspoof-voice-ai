@@ -223,34 +223,48 @@ bonafide-vs-spoof cues, inflating dev accuracy in a way that wouldn't generalize
 ASVspoof2019's speaker-disjoint partitions exist specifically to prevent this.
 
 **The accuracy paradox this project actually hit, and how it was fixed (not just
-diagnosed):** the first version of this pipeline evaluated only at scikit-learn's
-default 0.5 decision threshold. Dev accuracy was 92.3%, which sounds strong, but
-the per-class breakdown told a different story:
+diagnosed):** the first version of this pipeline had only one candidate model
+(Random Forest) and evaluated it at scikit-learn's default 0.5 decision
+threshold. Dev accuracy was 92.3%, which sounds strong, but the per-class
+breakdown told a different story:
 
 ```
                   precision    recall  f1-score   support
-bonafide (human)       0.93      0.27      0.42      2548
+bonafide (human)       0.93      0.28      0.42      2548
       spoof (AI)       0.92      1.00      0.96     22296
 ```
 
-The model caught essentially all spoofed speech (99.8% recall) but correctly
-flagged only 27% of real human speech as bonafide - heavily biased toward
-predicting "spoof." Dev is ~90% spoof, so a model that just leans toward the
-majority class scores well on accuracy while failing the minority class.
-`class_weight`/`sample_weight` reweight the *training* loss, but that doesn't
-change the *default 0.5 threshold* `.predict()` applies at evaluation time -
-the two are different levers, and fixing only one isn't enough.
+Random Forest caught essentially all spoofed speech (99.8% recall) but
+correctly flagged only **28%** of real human speech as bonafide - heavily
+biased toward predicting "spoof." Dev is ~90% spoof, so a model that just leans
+toward the majority class scores well on accuracy while failing the minority
+class. `class_weight`/`sample_weight` reweight the *training* loss, but that
+doesn't change the *default 0.5 threshold* `.predict()` applies at evaluation
+time - the two are different levers, and fixing only one isn't enough.
 
 This is exactly why the training script also reports **ROC-AUC** and **EER**
-(`compute_eer()` in this file) - both threshold-independent, and EER specifically
-is the metric the official ASVspoof challenge itself is scored on. A ~9% EER
-means the underlying probability scores separate the two classes reasonably
-well; the poor recall above was a threshold-*placement* problem on top of an
-already reasonably-scoring model, not evidence the features carried no signal.
-`compute_eer()` returns not just the error rate but the **score threshold** at
-that operating point, and the model artifact now stores it and uses it instead
-of 0.5. The result, re-measured on the same dev set with the winning Gradient
-Boosting model at its own EER threshold (0.689, not 0.5):
+(`compute_eer()` in this file) - both threshold-independent, and EER
+specifically is the metric the official ASVspoof challenge itself is scored on.
+
+**Two separate fixes went in, and it matters which number you attribute to
+which one** - this tripped us up once already (a discrepancy between a "27%"
+figure quoted here and an "80%" figure on the dashboard/slides, from before
+this section was corrected):
+
+| | Random Forest | Gradient Boosting (deployed) |
+|---|---|---|
+| Bonafide recall @ default 0.5 threshold | 28.0% | 80.2% |
+| Bonafide recall @ that model's own EER threshold | 88.1% | 90.7% |
+
+1. **Switching models helped on its own.** Gradient Boosting's raw probability
+   outputs are far less skewed than Random Forest's turned out to be - even at
+   the naive default threshold, it recovers 80% of bonafide recall vs. Random
+   Forest's 28%, with no threshold change involved at all.
+2. **Switching the threshold helped further, for whichever model you deploy.**
+   `compute_eer()` returns not just the error rate but the **score threshold**
+   at that operating point, and the model artifact now stores and uses it
+   instead of 0.5. For the deployed Gradient Boosting model, that takes
+   bonafide recall the rest of the way, 80.2% → 90.7%:
 
 ```
                   precision    recall  f1-score   support
@@ -258,14 +272,22 @@ bonafide (human)       0.53      0.91      0.67      2548
       spoof (AI)       0.99      0.91      0.95     22296
 ```
 
-Bonafide recall: 27% → 91%. Precision on bonafide dropped (0.93 → 0.53) - the
-model now calls more things bonafide, including some spoof clips it used to
-catch - which is the real trade-off EER makes explicit rather than hiding: you
-cannot maximize both classes' accuracy simultaneously on an imbalanced problem,
-you can only choose *which* trade-off point on the ROC curve to operate at. EER
-picks the point where both error types are equal, which is a principled default
-rather than the arbitrary default of 0.5. This was re-confirmed independently on
-the live Kafka streaming run against real held-out eval data, not just recomputed
+So: **"28% → 91%" is a fair headline for "the original naive approach vs. the
+final deployed one,"** but it's the combined effect of two changes, not one
+threshold move on a single fixed model - the 28% is Random Forest at 0.5, the
+91% is Gradient Boosting at its EER threshold. Every number the dashboard and
+slides show is Gradient Boosting-only (its 0.5-threshold row is 80%, not 28%),
+since that's the model actually deployed; this document is the one place that
+also keeps the original Random Forest number around, for the historical "how
+was the problem first found" narrative. Precision on bonafide dropped either
+way (0.93 → 0.53 for the deployed model) - the model now calls more things
+bonafide, including some spoof clips it used to catch, which is the real
+trade-off EER makes explicit rather than hiding: you cannot maximize both
+classes' accuracy simultaneously on an imbalanced problem, you can only choose
+*which* trade-off point on the ROC curve to operate at. EER picks the point
+where both error types are equal, which is a principled default rather than
+the arbitrary default of 0.5. This was re-confirmed independently on the live
+Kafka streaming run against real held-out eval data, not just recomputed
 on the same dev set the threshold was chosen from - see the streaming section
 below and `docs/RESULTS.md`.
 

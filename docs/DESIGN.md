@@ -127,12 +127,16 @@ full walkthrough of every component, and `docs/RESULTS.md` for the actual number
   attacks) — PA spoofing is a person replaying a recording, not AI-generated speech,
   so it doesn't fit the "human-or-AI" framing.
 - **The EER-optimal threshold trades some spoof recall for bonafide recall, and that
-  trade-off is reported, not hidden.** Moving off the default 0.5 threshold fixed a
-  real accuracy-paradox bug (27% → 91% bonafide recall on dev, independently confirmed
-  on live streamed eval data), but a handful of harder attack types score worse under
-  the new threshold than the old one did (see `docs/EXPLANATION.md`). There is no
-  threshold that maximizes both classes' accuracy simultaneously on an imbalanced
-  problem — EER is a principled choice of *which* trade-off to operate at, not a
+  trade-off is reported, not hidden.** The original single-model pipeline (Random
+  Forest only, default 0.5 threshold) recovered just 28% of bonafide recall on
+  dev; the deployed model (Gradient Boosting, chosen by EER) reaches 91% at its
+  own EER threshold — part of that gain is a better-calibrated model, part is the
+  threshold fix itself (see `docs/EXPLANATION.md` for the full breakdown by
+  model). Independently confirmed on live streamed eval data. A handful of
+  harder attack types score worse under the new threshold than the old one did.
+  There is no threshold that maximizes both classes' accuracy simultaneously on
+  an imbalanced problem — EER is a principled choice of *which* trade-off to
+  operate at, not a
   free win.
 - **The embedding is the classifier's own standardized feature vector, not a
   separate pretrained audio embedding model.** This keeps the "embeddings and
