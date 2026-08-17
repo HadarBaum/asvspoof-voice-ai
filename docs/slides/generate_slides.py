@@ -138,22 +138,43 @@ def add_header(prs, title, subtitle=None, slide_num=None):
     return slide
 
 
-def add_bullets(slide, bullets, top=Inches(1.55), width=None, size=19, indent_sub=True):
+def add_bullets(slide, bullets, top=Inches(1.55), width=None, size=19):
+    """Every bullet is one complete sentence/point, same size and color -
+    PowerPoint's own word-wrap (word_wrap=True below) handles long lines by
+    wrapping onto a second visual line automatically, so there's no need to
+    (and no reason to) manually pre-split long bullets into fragments."""
     width = width or (SLIDE_W - 2 * MARGIN)
     box = slide.shapes.add_textbox(MARGIN, top, width, SLIDE_H - top - Inches(0.5))
     tf = box.text_frame
     tf.word_wrap = True
     for i, bullet in enumerate(bullets):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
-        is_sub = indent_sub and bullet.startswith("  ")
-        p.text = ("•  " + bullet.strip()) if not is_sub else ("–  " + bullet.strip())
-        p.font.size = Pt(size - 3 if is_sub else size)
-        p.font.color.rgb = MUTED if is_sub else DARK_TEXT
+        p.text = "•  " + bullet.strip()
+        p.font.size = Pt(size)
+        p.font.color.rgb = DARK_TEXT
         p.font.name = FONT
-        p.space_after = Pt(10)
-        if is_sub:
-            p.level = 1
+        p.space_after = Pt(12)
     return box
+
+
+def add_button(slide, text, url, left, top, width=Inches(3.6), height=Inches(0.65), color=TEAL):
+    """A clickable rounded-rectangle CTA. PowerPoint (and the .pptx format)
+    supports real hyperlinks on shapes via click_action - this isn't a static
+    image of a button, clicking it in Slide Show mode actually opens the URL
+    in the system's default browser."""
+    shape = _rounded_rect(slide, left, top, width, height, color)
+    shape.click_action.hyperlink.address = url
+    tf = shape.text_frame
+    tf.word_wrap = True
+    p = tf.paragraphs[0]
+    p.text = text
+    p.font.size = Pt(17)
+    p.font.bold = True
+    p.font.color.rgb = WHITE
+    p.font.name = FONT
+    p.alignment = PP_ALIGN.CENTER
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    return shape
 
 
 def add_stat_cards(slide, stats, top=Inches(1.55), card_h=Inches(1.7)):
@@ -327,13 +348,43 @@ def main():
             highlight_rows=highlight,
         )
         add_bullets(slide, [
-            "Selection metric is EER — the metric the ASVspoof challenge itself is scored on, not raw",
-            "  accuracy, which looked strong while quietly failing bonafide clips (next slide)",
+            "Selection metric is EER — the metric the ASVspoof challenge itself is scored on, not raw accuracy, "
+            "which looked strong while quietly failing bonafide clips (see the next two slides).",
         ], top=Inches(4.0), size=16)
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
 
-    # --- 5. Results: the accuracy paradox, found and fixed -----------------
+    # --- 5. How EER is calculated --------------------------------------------
+    slide = add_header(prs, "How EER is calculated", "The metric the ASVspoof challenge itself is scored on", slide_num=next_num())
+    add_bullets(slide, [
+        "Score every dev utterance with the model, giving each one a P(spoof) between 0 and 1.",
+        "Sweep every possible decision threshold and, at each one, compute two error rates: the "
+        "false-acceptance rate (bonafide clips wrongly called spoof) and the false-rejection rate "
+        "(spoof clips wrongly called bonafide).",
+        "As the threshold moves, one error rate goes up while the other goes down — the Equal Error "
+        "Rate is the threshold where the two curves cross, i.e. where both error rates are equal.",
+        "EER itself is that shared error rate at the crossing point; the threshold at that point is "
+        "what actually gets deployed (see the model artifact in common/model.py).",
+        "Lower EER = better separation between the two classes. 0% would mean a threshold exists "
+        "with zero errors of either kind; this project's deployed model scores 9.26%.",
+    ], size=17)
+    _rounded_rect(slide, Inches(0.6), Inches(5.85), SLIDE_W - Inches(1.2), Inches(1.15), CARD_BG, border_color=BORDER)
+    code_box = slide.shapes.add_textbox(Inches(0.85), Inches(5.98), SLIDE_W - Inches(1.7), Inches(0.95))
+    ctf = code_box.text_frame
+    ctf.word_wrap = True
+    for i, line in enumerate([
+        "fpr, tpr, thresholds = roc_curve(y_true_spoof, y_score_spoof)",
+        "fnr = 1 - tpr",
+        "eer_idx = argmin(abs(fnr - fpr))   # where the two curves are closest",
+        "eer, threshold = (fpr[eer_idx] + fnr[eer_idx]) / 2,  thresholds[eer_idx]",
+    ]):
+        p = ctf.paragraphs[0] if i == 0 else ctf.add_paragraph()
+        p.text = line
+        p.font.name = "Consolas"
+        p.font.size = Pt(13)
+        p.font.color.rgb = NAVY
+
+    # --- 6. Results: the accuracy paradox, found and fixed -----------------
     slide = add_header(prs, "Results — the accuracy paradox, found and fixed", slide_num=next_num())
     if metrics:
         add_stat_cards(slide, [
@@ -342,88 +393,99 @@ def main():
             (f"{metrics['eer_dev']:.1%}", "Equal Error Rate\n(ASVspoof's own metric)", BLUE),
         ])
         add_bullets(slide, [
-            "Dev accuracy at the default threshold (94.3%) looked strong — but the model was quietly",
-            "  biased toward the majority class: it caught spoof reliably, bonafide much less so",
-            "Fix: the model artifact now stores its own EER-optimal decision threshold, used",
-            "  everywhere (streaming consumer, web app) instead of scikit-learn's default 0.5",
-            "Independently re-confirmed on live Kafka-streamed eval data, not just the dev set",
-            "  it was tuned on — bonafide accuracy went 29.7% → 91.5% on the streamed sample too",
+            "Dev accuracy at the default threshold (94.3%) looked strong, but the model was quietly biased "
+            "toward the majority class: it caught spoof reliably, bonafide much less so.",
+            "Fix: the model artifact now stores its own EER-optimal decision threshold, used everywhere "
+            "(streaming consumer, web app) instead of scikit-learn's default 0.5.",
+            "Independently re-confirmed on live Kafka-streamed eval data, not just the dev set it was tuned "
+            "on — bonafide accuracy went 29.7% → 91.5% on the streamed sample too.",
         ], top=Inches(3.55), size=16)
     else:
         add_bullets(slide, ["Run the pipeline and re-generate slides for real numbers."])
 
-    # --- 6. Results: ROC curve + confusion matrix ---------------------------
+    # --- 7. Results: ROC curve + confusion matrix ---------------------------
     slide = add_header(prs, "Results — ROC curve & confusion matrix", slide_num=next_num())
     add_image_row(slide, [
         os.path.join(CHARTS_DIR, "roc_curve.png"),
         os.path.join(CHARTS_DIR, "confusion_matrix.png"),
     ], caption="Left: both candidate models, deployed model's EER point marked. Right: streamed eval predictions.")
 
-    # --- 7. Results: feature importance + confidence calibration ------------
+    # --- 8. Results: feature importance + confidence calibration ------------
     slide = add_header(prs, "Results — what the model learned, and how sure it is", slide_num=next_num())
     add_image_row(slide, [
         os.path.join(CHARTS_DIR, "feature_importance.png"),
         os.path.join(CHARTS_DIR, "confidence_histogram.png"),
     ], caption="Left: top acoustic features (MFCC variance dominates). Right: confidence, correct vs. incorrect calls.")
 
-    # --- 8. Results: accuracy by attack type --------------------------------
+    # --- 9. Results: accuracy by attack type --------------------------------
     slide = add_header(prs, "Results — accuracy by attack type", "Streamed eval predictions, near-perfect on most TTS/VC systems", slide_num=next_num())
     add_image_row(slide, [os.path.join(CHARTS_DIR, "accuracy_by_attack.png")])
 
-    # --- 9. AI capability: embeddings + semantic search ---------------------
+    # --- 10. AI capability: embeddings + semantic search ---------------------
     slide = add_header(prs, "AI capability 2 — embeddings & semantic search", slide_num=next_num())
     add_bullets(slide, [
-        "The same acoustic feature vectors double as embeddings — no separate embedding model",
-        "Standardized (zero mean, unit variance) so cosine similarity isn't dominated by whichever",
-        "  feature happens to have the largest raw scale",
-        "Indexed into Elasticsearch as dense_vector fields, added to the existing index in place",
-        "  (a mapping update, not a reindex — the 50k+ documents were already there)",
-        "Powers /classify's \"most acoustically similar training clips\" — k-NN search, playable",
-        "  in the browser, replacing a keyword match with genuine semantic search",
+        "The same acoustic feature vectors double as embeddings — no separate embedding model needed.",
+        "Standardized (zero mean, unit variance) so cosine similarity isn't dominated by whichever "
+        "feature happens to have the largest raw scale.",
+        "Indexed into Elasticsearch as dense_vector fields, added to the existing index in place "
+        "(a mapping update, not a reindex — the 50k+ documents were already there).",
+        "Powers /classify's \"most acoustically similar training clips\" — k-NN search, playable in "
+        "the browser, replacing a keyword match with genuine semantic search.",
     ])
 
-    # --- 10. AI capability: streaming enrichment -----------------------------
+    # --- 11. AI capability: streaming enrichment -----------------------------
     slide = add_header(prs, "AI capability 3 — streaming enrichment", "Kafka producer/consumer, near-real-time scoring", slide_num=next_num())
     add_bullets(slide, [
-        "Producer replays eval-set utterance events (a MinIO key, not the audio itself)",
-        "Consumer fetches the clip, extracts features, scores it at the deployed EER threshold,",
-        "  and writes an enriched prediction to Elasticsearch — one document per utterance, live",
-        "Same feature-extraction and model code as the batch job and the web app — one",
-        "  implementation applied three ways, not three separate things to maintain and defend",
-        "A named consumer group tracks offset, so re-running resumes instead of re-scoring",
+        "Producer replays eval-set utterance events (a MinIO key, not the audio itself).",
+        "Consumer fetches the clip, extracts features, scores it at the deployed EER threshold, and "
+        "writes an enriched prediction to Elasticsearch — one document per utterance, live.",
+        "Same feature-extraction and model code as the batch job and the web app — one implementation "
+        "applied three ways, not three separate things to maintain and defend.",
+        "A named consumer group tracks offset, so re-running resumes instead of re-scoring.",
     ])
 
-    # --- 11. Live demo -------------------------------------------------------
+    # --- 12. Live demo -------------------------------------------------------
     slide = add_header(prs, "Live demo", slide_num=next_num())
     add_bullets(slide, [
-        "/classify — upload a clip or record live from the microphone (captured via the Web",
-        "  Audio API, encoded to WAV client-side — no server changes needed for live recording)",
-        "Returns Human / AI-generated + confidence, plus the 5 most similar training clips —",
-        "  each one playable right in the results, so you can hear what \"similar\" sounds like",
-        "/dashboard — live Elasticsearch aggregations: model comparison, threshold trade-off,",
-        "  ROC curve, confusion matrix, feature importance, confidence calibration",
-    ])
+        "/classify — upload a clip or record live from the microphone (captured via the Web Audio "
+        "API, encoded to WAV client-side — no server changes needed for live recording).",
+        "Returns Human / AI-generated + confidence, plus the 5 most similar training clips, each "
+        "one playable right in the results, so you can hear what \"similar\" sounds like.",
+        "/dashboard — live Elasticsearch aggregations: model comparison, threshold trade-off, ROC "
+        "curve, confusion matrix, feature importance, confidence calibration.",
+    ], size=18)
+    add_button(slide, "▶  Open /classify", "http://localhost:5000/classify", MARGIN, Inches(5.75))
+    add_button(slide, "▶  Open /dashboard", "http://localhost:5000/dashboard", MARGIN + Inches(3.9), Inches(5.75), color=BLUE)
+    _textbox(slide, MARGIN, Inches(6.55), SLIDE_W - 2 * MARGIN, Inches(0.4),
+             "Links open localhost:5000 — click while presenting from the machine running the app (see README.md).",
+             size=11, color=MUTED)
 
-    # --- 12. Challenges & trade-offs ------------------------------------------
+    # --- 13. Challenges & trade-offs ------------------------------------------
     slide = add_header(prs, "Challenges & trade-offs", slide_num=next_num())
     add_bullets(slide, [
-        "Windows + Spark: worker Python resolution, path-with-spaces, and a Docker Desktop",
-        "  networking quirk all broke Spark's driver↔executor RPC — diagnosed and fixed, not hidden",
-        "The EER threshold trades some spoof recall for bonafide recall — a deliberate choice,",
-        "  not a free win: no single threshold maximizes both on an imbalanced dataset",
-        "Embedding is the classifier's own feature vector, not a separate pretrained audio",
-        "  embedding model — keeps the semantic-search capability fully self-contained",
-        "Kept Python end-to-end (not Scala) since the feature-extraction library is Python-only",
-        "Speaker-disjoint train/dev split (not random) to avoid inflating accuracy via leakage",
-    ], size=17)
+        "Windows + Spark: worker Python resolution, path-with-spaces, and a Docker Desktop networking "
+        "quirk all broke Spark's driver↔executor RPC — diagnosed and fixed, not hidden.",
+        "The EER threshold trades some spoof recall for bonafide recall — a deliberate choice, not a "
+        "free win: no single threshold maximizes both on an imbalanced dataset.",
+        "Embedding is the classifier's own feature vector, not a separate pretrained audio embedding "
+        "model — keeps the semantic-search capability fully self-contained.",
+        "Kept Python end-to-end (not Scala) since the feature-extraction library is Python-only.",
+        "Speaker-disjoint train/dev split (not random) to avoid inflating accuracy via leakage.",
+    ], size=18)
 
-    # --- 13. Closing ----------------------------------------------------------
+    # --- 14. Closing ----------------------------------------------------------
     slide = new_slide(prs)
     _rect(slide, 0, 0, SLIDE_W, SLIDE_H, NAVY)
     _rect(slide, 0, Inches(3.7), SLIDE_W, Pt(5), TEAL)
-    _textbox(slide, Inches(1), Inches(2.9), Inches(11.3), Inches(1.0), "Questions?", size=40, bold=True, color=WHITE)
-    _textbox(slide, Inches(1), Inches(3.9), Inches(11.3), Inches(0.5),
-             "github.com/HadarBaum/asvspoof-voice-ai", size=16, color=LIGHT_TEXT)
+    _textbox(slide, Inches(1), Inches(2.5), Inches(11.3), Inches(1.0), "Questions?", size=40, bold=True, color=WHITE)
+    link_box = slide.shapes.add_textbox(Inches(1), Inches(3.55), Inches(8), Inches(0.5))
+    lp = link_box.text_frame.paragraphs[0]
+    lp.text = "github.com/HadarBaum/asvspoof-voice-ai"
+    lp.font.size = Pt(16)
+    lp.font.color.rgb = LIGHT_TEXT
+    lp.font.name = FONT
+    lp.runs[0].hyperlink.address = "https://github.com/HadarBaum/asvspoof-voice-ai"
+    add_button(slide, "▶  Open the live demo", "http://localhost:5000", Inches(1), Inches(4.3))
 
     prs.save(OUT_PATH)
     print(f"Wrote {OUT_PATH} ({len(prs.slides)} slides)")
