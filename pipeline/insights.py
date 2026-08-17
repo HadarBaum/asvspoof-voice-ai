@@ -174,6 +174,20 @@ def main():
     for b in class_balance:
         lines.append(f"| {b['key']} | {b['doc_count']} |")
 
+    lines += [
+        "",
+        "## Visualizations",
+        "",
+        "Six charts, all regenerated from the data above (and from the training run - see "
+        "`docs/training_metrics.json` / `docs/model_comparison.json`), live in "
+        "`app/static/charts/` and render on the `/dashboard` page:",
+"`accuracy_by_attack.png`, `class_balance.png`, `confusion_matrix.png`, and "
+        "`confidence_histogram.png` (written by this script), plus `roc_curve.png` and "
+        "`feature_importance.png` (written by `pipeline/train_classifier.py` instead, since "
+        "those need the model's dev-set predictions rather than the streamed predictions "
+        "this script reads).",
+    ]
+
     out_path = os.path.join(DOCS_DIR, "RESULTS.md")
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")

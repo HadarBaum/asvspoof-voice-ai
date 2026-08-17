@@ -38,3 +38,8 @@ Generated from 498 utterances scored by the streaming enrichment pipeline.
 |---|---|
 | spoof | 439 |
 | bonafide | 59 |
+
+## Visualizations
+
+Six charts, all regenerated from the data above (and from the training run - see `docs/training_metrics.json` / `docs/model_comparison.json`), live in `app/static/charts/` and render on the `/dashboard` page:
+`accuracy_by_attack.png`, `class_balance.png`, `confusion_matrix.png`, and `confidence_histogram.png` (written by this script), plus `roc_curve.png` and `feature_importance.png` (written by `pipeline/train_classifier.py` instead, since those need the model's dev-set predictions rather than the streamed predictions this script reads).

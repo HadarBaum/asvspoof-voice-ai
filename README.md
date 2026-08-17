@@ -59,7 +59,10 @@ python -m pipeline.kafka_producer --la-root data/sample/LA --limit 200 --delay-s
 # 5. generate insights (charts + docs/RESULTS.md) from what's in Elasticsearch
 python -m pipeline.insights
 
-# 6. run the demo web app
+# 6. regenerate the slide deck from the latest metrics/comparison/charts
+python docs/slides/generate_slides.py
+
+# 7. run the demo web app
 python -m app.server        # http://localhost:5000
 ```
 
@@ -67,10 +70,13 @@ python -m app.server        # http://localhost:5000
 
 - `http://localhost:5000/classify` — upload a clip *or record one live from your
   microphone*, get Human / AI-generated + confidence, plus the 5 most acoustically
-  similar training clips (Elasticsearch k-NN search)
-- `http://localhost:5000/dashboard` — live insights from Elasticsearch, including
-  the deployed model's metrics at its EER threshold vs. what the default 0.5
-  threshold would give
+  similar training clips (Elasticsearch k-NN search), each one **playable** right
+  in the results
+- `http://localhost:5000/dashboard` — live insights from Elasticsearch: a
+  Random-Forest-vs-Gradient-Boosting comparison table, the deployed model's
+  metrics at its EER threshold vs. what the default 0.5 threshold would give,
+  and six charts (accuracy by attack, class balance, ROC curve, feature
+  importance, confusion matrix, confidence calibration)
 
 ## Repository layout
 

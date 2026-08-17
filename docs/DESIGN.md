@@ -68,9 +68,12 @@ flowchart TD
    writes both a markdown report and the charts the dashboard displays.
 8. **Serving.** A Flask app exposes `/classify` (upload a clip *or record one live
    from the microphone*, get scored by the exact same feature-extraction + model
-   code as the pipeline, plus the 5 most similar training clips via k-NN search)
-   and `/dashboard` (insights queried live from Elasticsearch, including a
-   deployed-threshold-vs-default-threshold comparison table).
+   code as the pipeline, plus the 5 most similar training clips via k-NN search,
+   each one **playable in the browser** via `/audio/<key>`, which streams the clip
+   straight out of MinIO) and `/dashboard` (insights queried live from
+   Elasticsearch: a model-comparison table, a deployed-threshold-vs-default-threshold
+   comparison table, and six charts — accuracy by attack, class balance, ROC curve,
+   feature importance, confusion matrix, confidence calibration).
 
 ## Technologies used
 

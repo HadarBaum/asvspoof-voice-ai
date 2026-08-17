@@ -377,13 +377,46 @@ the streaming/event backbone.
 ### `pipeline/insights.py`
 Runs Elasticsearch aggregation queries against `asvspoof-predictions` — overall
 accuracy, accuracy by attack ID, a confusion matrix, class balance — and writes both
-`docs/RESULTS.md` and the PNG charts the dashboard displays. Every number here comes
-from a live query, not a hand-typed table, so re-running the pipeline (sample or
-full-scale) and re-running this script always reflects the actual data.
+`docs/RESULTS.md` and the PNG charts the dashboard displays:
+- `accuracy_by_attack.png` / `class_balance.png` — straight from the terms
+  aggregations above.
+- `confusion_matrix.png` — the same 2×2 true-label × predicted-label counts
+  already computed for the markdown table, now also rendered as a heatmap
+  (`plt.imshow` + text annotations) so it reads at a glance instead of
+  requiring someone to parse four numbers in a table.
+- `confidence_histogram.png` — the one chart here that *isn't* an aggregation:
+  Elasticsearch's aggregation API gives you terms/stats/percentiles, but not a
+  literal distribution, so this pulls the raw `(confidence, correct)` pairs for
+  every scored utterance (`es.search(..., source=["confidence", "correct"])`,
+  cheap since there are only hundreds to low-thousands of predictions) and
+  bins them locally into two overlaid histograms - correct vs. incorrect
+  predictions. A well-calibrated model's incorrect predictions should cluster
+  at *lower* confidence than its correct ones; on this run they mostly do, but
+  a real (if smaller) share of incorrect predictions land at high confidence
+  too - the model is sometimes confidently wrong, which is worth being able to
+  say out loud if asked about calibration.
+
+Every number here comes from a live query, not a hand-typed table, so
+re-running the pipeline (sample or full-scale) and re-running this script
+always reflects the actual data.
+
+**Where the ROC curve and feature-importance charts come from instead:** they're
+generated in `pipeline/train_classifier.py`, not here, because they need
+`y_dev`/`y_proba` and the fitted model's `.feature_importances_` - data that
+only exists in that script's scope, not in anything Elasticsearch stores. The
+ROC curve plots *both* candidate models (so the comparison table's numbers
+have a visual companion) with the deployed model's exact EER operating point
+marked as a dot; the feature-importance chart is the same top-10 list already
+printed to the console and saved in `docs/training_metrics.json`, now a
+horizontal bar chart. One implementation detail worth knowing: the ROC curve's
+`fpr`/`tpr` arrays are numpy arrays, kept around in memory for plotting, but
+stripped out before `docs/model_comparison.json` is written - numpy arrays
+aren't JSON-serializable, and a machine-readable comparison file doesn't need
+the full curve anyway, just the summary numbers.
 
 ## 5. `app/` — the demo web app
 
-`app/server.py` is a small Flask app with three routes:
+`app/server.py` is a small Flask app with four routes:
 - `/` — links/overview.
 - `/classify` — accepts an uploaded audio file **or a live microphone
   recording** (see below), runs it through `common.features.extract_features`
@@ -391,21 +424,49 @@ full-scale) and re-running this script always reflects the actual data.
   returns "Human" or "AI-generated" + confidence, and additionally runs
   `find_similar_clips()` - the same standardization + Elasticsearch `knn`
   search `pipeline/index_embeddings.py` set up - to show the 5 most
-  acoustically similar training clips. Classification is the same code path as
+  acoustically similar training clips, **each one playable in the browser**
+  (see `/audio` below). Classification is the same code path as
   `streaming_enrichment.py`, just triggered by an HTTP upload instead of a
   Kafka message; the similarity search never blocks the main result if it
   fails (wrapped in its own try/except), since it's a bonus, not the core
   answer.
+- `/audio/<path:key>` — streams a clip straight out of MinIO by its object key
+  (`minio_client.get_object_bytes()`, the exact same call every other
+  MinIO-reading component uses) and returns it as `audio/flac`. This exists
+  so the similar-clips list is actually useful in a live demo: a similarity
+  *score* is an abstraction, but hearing that the top match really does sound
+  alike is what makes the audience believe the embedding is doing something
+  real. `<path:key>` (not the default `<string:key>` converter) matters here -
+  MinIO keys contain `/` (e.g. `LA/ASVspoof2019_LA_train/flac/LA_T_....flac`),
+  and the default converter stops matching at the first slash.
 - `/dashboard` — runs the same style of Elasticsearch aggregations as
   `pipeline/insights.py`, live, so the page always reflects current pipeline
-  state, plus a side-by-side table of the deployed model's metrics at its EER
-  threshold vs. what the default 0.5 threshold would have given - the
-  accuracy-paradox comparison made concrete on the same page a grader would
-  look at first.
+  state, plus:
+  - an inline **model comparison table** (Random Forest vs. Gradient Boosting,
+    read from `docs/model_comparison.json` server-side - the file path itself
+    is never shown to the audience, only the real numbers it contains,
+    rendered as an actual table),
+  - a **threshold comparison table** (deployed EER threshold vs. what the
+    default 0.5 threshold would have given) with the accuracy-paradox
+    explanation written out in the page itself rather than pointing at this
+    document,
+  - the **ROC curve, feature importance, confusion matrix, and confidence
+    histogram** charts (see `pipeline/train_classifier.py` and
+    `pipeline/insights.py` above for how each is generated).
+
+  Two of the threshold-comparison table's cells used to render as an em-dash
+  placeholder (`—`) instead of a number: `train_classifier.py` computed
+  spoof-recall and F1 at the default threshold internally but only ever
+  persisted 2 of those 4 "at default threshold" metrics into
+  `training_metrics.json`. Not a fundamental limitation, just an incomplete
+  first pass - fixed by saving the other two fields once the gap was noticed.
 
 No JavaScript build step, no Node, no external CDN dependency — server-rendered
 Jinja2 templates (`app/templates/`) and a small hand-written stylesheet
-(`app/static/style.css`).
+(`app/static/style.css`). The UI deliberately never references its own source
+files (no "see docs/EXPLANATION.md" text on-screen) - anything worth knowing
+while looking at a page is written directly into that page instead, since an
+audience watching a demo can't open the repo mid-presentation.
 
 **Live microphone recording (`classify.html`'s inline `<script>`):** clicking
 "Start recording" calls `navigator.mediaDevices.getUserMedia({audio: true})`,
@@ -450,8 +511,8 @@ being a legitimate, standard way to use Spark for a project this size.
 | Data and pipeline (25%) | `pipeline/ingest_to_minio.py` → `batch_feature_extraction.py` → Parquet/Elasticsearch is a real ETL pipeline over unstructured audio data |
 | Use of course technologies (20%) | Object store (MinIO), streaming (Kafka), NoSQL (Elasticsearch), Spark, Docker — five course technologies, each with a clear, non-decorative role |
 | AI capability (25%) | Two AI capabilities from the brief, both operating on the data itself: (f) a compared/selected classifier (Random Forest vs. Gradient Boosting, picked by EER) applied in both batch validation and streaming enrichment (§6.2e-style); and (b) embeddings + Elasticsearch k-NN semantic search over the same acoustic features — not bolted-on separate features, all sharing one feature-extraction implementation |
-| Results and insights (15%) | `docs/RESULTS.md`, generated by live Elasticsearch aggregations in `pipeline/insights.py` |
-| Presentation and demo (10%) | `docs/slides/generate_slides.py` builds the deck; `/classify` and `/dashboard` are the live demo |
+| Results and insights (15%) | `docs/RESULTS.md`, generated by live Elasticsearch aggregations in `pipeline/insights.py`, backed on the dashboard by six generated charts (accuracy by attack, class balance, ROC curve, feature importance, confusion matrix, confidence calibration) |
+| Presentation and demo (10%) | `docs/slides/generate_slides.py` builds a 13-slide deck (model comparison table, stat cards, all six charts) styled to match the live app's color palette; `/classify` (upload or live mic recording, playable similar-clip search) and `/dashboard` are the live demo |
 | Understanding and Q&A (5%) | This document — every component's purpose and the trade-offs behind it, in plain language |
 
 ## 8. How to reproduce
@@ -460,6 +521,9 @@ See `README.md` for exact commands. Short version: `docker compose up -d`, then 
 `pipeline/ingest_to_minio.py` → `batch_feature_extraction.py` →
 (`train_classifier.py` and `index_embeddings.py`, either order - both only need
 the Parquet feature table) → (`kafka_producer.py` + `streaming_enrichment.py`
-together) → `insights.py`, then `python -m app.server`. Every step accepts
-`--la-root data/sample/LA` (the committed synthetic sample, no download needed)
-or `--la-root data/raw/LA` (the real dataset, after `pipeline/download_dataset.py`).
+together) → `insights.py` → `docs/slides/generate_slides.py` (regenerates the
+deck from whatever's currently in `training_metrics.json`, `model_comparison.json`,
+and `app/static/charts/` - always run it last), then `python -m app.server`.
+Every step accepts `--la-root data/sample/LA` (the committed synthetic sample,
+no download needed) or `--la-root data/raw/LA` (the real dataset, after
+`pipeline/download_dataset.py`).
