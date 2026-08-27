@@ -341,12 +341,14 @@ whether it matched the known true label, a timestamp) into Elasticsearch
 (`asvspoof-predictions`) — one document per utterance, as it's scored, not in a
 batch after the fact.
 
-**On both full-scale runs, the streaming demo processed a capped subset of the
-5,000 eval utterances queued, not all 5,000** (1,165 with the original Random
-Forest + 0.5-threshold model; 498 after switching to the Gradient Boosting +
-EER-threshold model, which needed a fresh consumer group - see below - to
-re-score from the start of the topic). The Kafka producer/consumer pair itself
-worked correctly throughout both runs - every message that was consumed was
+**On all three full-scale runs, the streaming demo processed a capped subset of
+the 5,000 eval utterances queued, not all 5,000** (1,165 with the original Random
+Forest + 0.5-threshold model; then 498, and later 2,000, with the Gradient
+Boosting + EER-threshold model — the switch needed a fresh consumer group, see
+below, to re-score from the start of the topic). **The 2,000-utterance run is the
+one `docs/RESULTS.md` and the slide deck report**; the 498 figure is kept here
+only for the historical narrative below. The Kafka producer/consumer pair itself
+worked correctly throughout all three runs - every message that was consumed was
 fetched, scored, and written to Elasticsearch with no errors - but consumer
 throughput on this machine was, unpredictably, far below what standalone
 benchmarking of the same `extract_features` + `predict_proba` call chain
@@ -359,14 +361,15 @@ fully validated by the batch training run above. The root cause was never
 conclusively identified; the leading candidate is Windows throttling
 long-running background console processes, though this was never proven.
 
-**The second (498-utterance) run independently confirms the threshold fix
-worked - not just on the dev set the threshold was chosen from, but on live,
-never-trained-on eval data streamed through Kafka:** bonafide accuracy on the
-"-" (bonafide) row in `docs/RESULTS.md` went from 29.7% (Random Forest, 0.5
-threshold) to 91.5% (Gradient Boosting, EER threshold) - matching the dev-set
-improvement almost exactly. The trade-off shows up too: a handful of the
-harder/later attack IDs (A17, A18, A19) score noticeably worse than they did
-under the old model (e.g. A17 dropped from 56.6% to 13.2%) - the new threshold
+**The Gradient Boosting runs independently confirm the threshold fix worked - not
+just on the dev set the threshold was chosen from, but on live, never-trained-on
+eval data streamed through Kafka:** bonafide accuracy on the "-" (bonafide) row
+in `docs/RESULTS.md` went from 29.7% (Random Forest, 0.5 threshold) to 91.5% on
+the 498-utterance run and **95.3% on the current 2,000-utterance run** (Gradient
+Boosting, EER threshold) - matching the dev-set improvement almost exactly. The
+trade-off shows up too: a handful of the harder/later attack IDs (A17, A18, A19)
+score noticeably worse than they did under the old model (A17 dropped from 56.6%
+to 15.9%, with A18 at 52.9% and A19 at 41.9%) - the new threshold
 buys bonafide recall by giving up some margin on the spoof attacks whose scores
 sit closest to the bonafide range. This is a real, worthwhile trade to make
 (catching genuine human speech reliably matters more than catching every
@@ -400,6 +403,17 @@ the streaming/event backbone.
 Runs Elasticsearch aggregation queries against `asvspoof-predictions` — overall
 accuracy, accuracy by attack ID, a confusion matrix, class balance — and writes both
 `docs/RESULTS.md` and the PNG charts the dashboard displays:
+
+**Why the report leads with balanced accuracy, not overall accuracy:** the eval
+partition is ~88% spoof, so a trivial "always predict spoof" baseline scores 88.2%
+on the streamed set — *higher* than the model's own 84.8% overall accuracy. Quoting
+84.8% would therefore understate a model that is genuinely working, for exactly the
+same reason 92.3% overstated one that wasn't in §4: raw accuracy on an imbalanced
+set tracks the class prior, not the model. The script now computes the per-class
+recalls off the confusion matrix it was already building and reports their
+unweighted mean — **balanced accuracy, 89.3%** (bonafide 95.3%, spoof 83.3%) —
+first, with overall accuracy kept second alongside the baseline it needs to be read
+against. Same numbers, same aggregations; only which one leads changed.
 - `accuracy_by_attack.png` / `class_balance.png` — straight from the terms
   aggregations above.
 - `confusion_matrix.png` — the same 2×2 true-label × predicted-label counts
@@ -533,8 +547,8 @@ being a legitimate, standard way to use Spark for a project this size.
 | Data and pipeline (25%) | `pipeline/ingest_to_minio.py` → `batch_feature_extraction.py` → Parquet/Elasticsearch is a real ETL pipeline over unstructured audio data |
 | Use of course technologies (20%) | Object store (MinIO), streaming (Kafka), NoSQL (Elasticsearch), Spark, Docker — five course technologies, each with a clear, non-decorative role |
 | AI capability (25%) | Two AI capabilities from the brief, both operating on the data itself: (f) a compared/selected classifier (Random Forest vs. Gradient Boosting, picked by EER) applied in both batch validation and streaming enrichment (§6.2e-style); and (b) embeddings + Elasticsearch k-NN semantic search over the same acoustic features — not bolted-on separate features, all sharing one feature-extraction implementation |
-| Results and insights (15%) | `docs/RESULTS.md`, generated by live Elasticsearch aggregations in `pipeline/insights.py`, backed on the dashboard by six generated charts (accuracy by attack, class balance, ROC curve, feature importance, confusion matrix, confidence calibration) |
-| Presentation and demo (10%) | `docs/slides/generate_slides.py` builds a 13-slide deck (model comparison table, stat cards, all six charts) styled to match the live app's color palette; `/classify` (upload or live mic recording, playable similar-clip search) and `/dashboard` are the live demo |
+| Results and insights (15%) | `docs/RESULTS.md`, generated by live Elasticsearch aggregations in `pipeline/insights.py`, leading with balanced accuracy rather than the class-prior-inflated overall accuracy, and backed on the dashboard by six generated charts (accuracy by attack, class balance, ROC curve, feature importance, confusion matrix, confidence calibration) |
+| Presentation and demo (10%) | `docs/slides/generate_slides.py` builds a 20-slide deck (per-stage pipeline slides, a native architecture diagram, the 53-feature breakdown, model comparison table, stat cards, all six charts) styled to match the live app's color palette; `/classify` (upload or live mic recording, playable similar-clip search) and `/dashboard` are the live demo, and `docs/PRESENTATION_SCRIPT.md` is the timed 10-minute script for it |
 | Understanding and Q&A (5%) | This document — every component's purpose and the trade-offs behind it, in plain language |
 
 ## 8. How to reproduce

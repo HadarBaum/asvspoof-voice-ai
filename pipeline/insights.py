@@ -138,6 +138,24 @@ def main():
     plt.savefig(os.path.join(CHARTS_DIR, "confidence_histogram.png"), dpi=120)
     plt.close()
 
+    # --- per-class recall and balanced accuracy -----------------------------
+    # Overall accuracy is actively misleading on this partition: eval is ~90% spoof,
+    # so a trivial "always predict spoof" baseline scores about as well as a real
+    # model does. This is the same imbalance trap the decision threshold already had
+    # to be fixed for (see docs/EXPLANATION.md §4) - it just reappears in the report
+    # if the report leads with raw accuracy. Balanced accuracy (the unweighted mean
+    # of the per-class recalls) is what separates the model from that baseline, so
+    # it is what RESULTS.md leads with; raw accuracy is still reported, second.
+    per_class_recall = {}
+    for idx, label in enumerate(labels):
+        support = matrix[idx].sum()
+        per_class_recall[label] = matrix[idx, idx] / support if support else float("nan")
+    balanced_accuracy = float(np.nanmean(list(per_class_recall.values())))
+
+    support_per_class = matrix.sum(axis=1)
+    majority_label = labels[int(support_per_class.argmax())]
+    majority_share = support_per_class.max() / matrix.sum() if matrix.sum() else float("nan")
+
     # --- markdown report ----------------------------------------------------
     lines = [
         "# Results and insights",
@@ -155,7 +173,15 @@ def main():
         )
     lines += [
         "",
-        f"**Overall streaming detection accuracy: {overall_accuracy:.1%}**",
+        f"**Balanced streaming detection accuracy: {balanced_accuracy:.1%}** "
+        f"(bonafide recall {per_class_recall['bonafide']:.1%}, "
+        f"spoof recall {per_class_recall['spoof']:.1%})",
+        "",
+        f"Overall (unbalanced) accuracy: {overall_accuracy:.1%}. This is reported second on "
+        f"purpose - {majority_share:.1%} of these utterances are `{majority_label}`, so a "
+        f'trivial "always predict {majority_label}" baseline would also score '
+        f"{majority_share:.1%} while learning nothing. Balanced accuracy above is the number "
+        "that actually distinguishes this model from that baseline, and is the one to quote.",
         "",
         "## Accuracy by attack type",
         "",

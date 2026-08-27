@@ -1,43 +1,43 @@
 # Results and insights
 
-Generated from 498 utterances scored by the streaming enrichment pipeline.
+Generated from 2000 utterances scored by the streaming enrichment pipeline.
 
-*Small sample size - either this ran against the committed synthetic/sample dataset (see `pipeline/dev_generate_synthetic_sample.py`) rather than the full ASVspoof2019 dataset, or the streaming run against the real data was deliberately capped short of the full eval queue (see docs/EXPLANATION.md's streaming trade-off note for why). Either way, treat per-attack-type breakdowns with correspondingly small per-bucket counts as directional, not precise.*
+**Balanced streaming detection accuracy: 89.3%** (bonafide recall 95.3%, spoof recall 83.3%)
 
-**Overall streaming detection accuracy: 84.9%**
+Overall (unbalanced) accuracy: 84.8%. This is reported second on purpose - 88.2% of these utterances are `spoof`, so a trivial "always predict spoof" baseline would also score 88.2% while learning nothing. Balanced accuracy above is the number that actually distinguishes this model from that baseline, and is the one to quote.
 
 ## Accuracy by attack type
 
 | Attack ID | Utterances | Accuracy |
 |---|---|---|
-| - | 59 | 91.5% |
-| A07 | 33 | 100.0% |
-| A08 | 32 | 100.0% |
-| A09 | 31 | 100.0% |
-| A10 | 39 | 100.0% |
-| A11 | 30 | 100.0% |
-| A12 | 38 | 86.8% |
-| A13 | 35 | 100.0% |
-| A14 | 34 | 100.0% |
-| A15 | 31 | 96.8% |
-| A16 | 43 | 83.7% |
-| A17 | 38 | 13.2% |
-| A18 | 30 | 63.3% |
-| A19 | 25 | 48.0% |
+| - | 236 | 95.3% |
+| A07 | 142 | 98.6% |
+| A08 | 135 | 100.0% |
+| A09 | 131 | 100.0% |
+| A10 | 128 | 100.0% |
+| A11 | 138 | 99.3% |
+| A12 | 155 | 88.4% |
+| A13 | 146 | 100.0% |
+| A14 | 135 | 99.3% |
+| A15 | 122 | 95.1% |
+| A16 | 152 | 84.2% |
+| A17 | 132 | 15.9% |
+| A18 | 119 | 52.9% |
+| A19 | 129 | 41.9% |
 
 ## Confusion matrix (true label -> predicted label counts)
 
 | True \ Predicted | bonafide | spoof |
 |---|---|---|
-| spoof | 70 | 369 |
-| bonafide | 54 | 5 |
+| spoof | 294 | 1470 |
+| bonafide | 225 | 11 |
 
 ## Class balance (streamed eval utterances)
 
 | True label | Count |
 |---|---|
-| spoof | 439 |
-| bonafide | 59 |
+| spoof | 1764 |
+| bonafide | 236 |
 
 ## Visualizations
 
