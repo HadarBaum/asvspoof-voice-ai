@@ -19,8 +19,9 @@ import os
 
 from pptx import Presentation
 from pptx.dml.color import RGBColor
-from pptx.enum.shapes import MSO_SHAPE
+from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
+from pptx.oxml.xmlchemy import OxmlElement
 from pptx.util import Emu, Inches, Pt
 
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "..")
@@ -177,6 +178,50 @@ def add_button(slide, text, url, left, top, width=Inches(3.6), height=Inches(0.6
     return shape
 
 
+def _diagram_node(slide, left, top, width, height, title, subtitle=None, fill=CARD_BG, border=TEAL):
+    """A flowchart box for the architecture diagram - a rounded rect with a bold
+    title and an optional smaller gray subtitle line underneath."""
+    box = _rounded_rect(slide, left, top, width, height, fill, border_color=border)
+    tf = box.text_frame
+    tf.word_wrap = True
+    tf.vertical_anchor = MSO_ANCHOR.MIDDLE
+    tf.margin_left = Inches(0.08)
+    tf.margin_right = Inches(0.08)
+    # split on "\n" into real paragraphs - a single run's embedded "\n" doesn't
+    # render as a line break in OOXML (see add_stat_cards for the same fix).
+    for i, line in enumerate(title.split("\n")):
+        p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
+        p.text = line
+        p.font.size = Pt(12.5)
+        p.font.bold = True
+        p.font.color.rgb = DARK_TEXT
+        p.font.name = FONT
+        p.alignment = PP_ALIGN.CENTER
+    if subtitle:
+        for line in subtitle.split("\n"):
+            sp = tf.add_paragraph()
+            sp.text = line
+            sp.font.size = Pt(9.5)
+            sp.font.color.rgb = MUTED
+            sp.font.name = FONT
+            sp.alignment = PP_ALIGN.CENTER
+    return box
+
+
+def _arrow(slide, x1, y1, x2, y2, color=MUTED, width=1.25):
+    """A straight connector with a triangle arrowhead, used to draw the flow
+    between architecture-diagram nodes. python-pptx has no high-level
+    arrowhead property, so the <a:tailEnd> element is added directly."""
+    conn = slide.shapes.add_connector(MSO_CONNECTOR.STRAIGHT, x1, y1, x2, y2)
+    conn.line.color.rgb = color
+    conn.line.width = Pt(width)
+    tail = OxmlElement("a:tailEnd")
+    tail.set("type", "triangle")
+    conn.line._get_or_add_ln().append(tail)
+    _no_shadow(conn)
+    return conn
+
+
 def add_stat_cards(slide, stats, top=Inches(1.55), card_h=Inches(1.7)):
     """stats: list of (big_number, label, color). Evenly spaced across the slide width."""
     n = len(stats)
@@ -326,6 +371,111 @@ def main():
         "Flask app: /classify (upload or record live, + similar-clip search) and /dashboard (insights)",
     ])
 
+    # --- 3b. Architecture diagram --------------------------------------------
+    slide = add_header(prs, "Architecture diagram", "The full pipeline, end to end - object store to serving", slide_num=next_num())
+
+    gap_a = Inches(0.25)
+    row1_w = Emu(int((SLIDE_W - 2 * MARGIN - 3 * gap_a) / 4))
+    row1_y, row1_h = Inches(1.5), Inches(0.95)
+    b1 = _diagram_node(slide, MARGIN, row1_y, row1_w, row1_h, "Kaggle: ASVspoof2019 LA", "download_dataset.py", border=BLUE)
+    b2 = _diagram_node(slide, MARGIN + 1 * (row1_w + gap_a), row1_y, row1_w, row1_h, "MinIO", "object store - raw audio", border=BLUE)
+    b3 = _diagram_node(slide, MARGIN + 2 * (row1_w + gap_a), row1_y, row1_w, row1_h, "Spark", "batch_feature_extraction.py", border=BLUE)
+    b4 = _diagram_node(slide, MARGIN + 3 * (row1_w + gap_a), row1_y, row1_w, row1_h, "Parquet +\nElasticsearch", "feature table", border=BLUE)
+    for a, b in [(b1, b2), (b2, b3), (b3, b4)]:
+        _arrow(slide, a.left + a.width, a.top + a.height // 2, b.left, b.top + b.height // 2)
+
+    gap_b = Inches(0.3)
+    row2_w = Emu(int((SLIDE_W - 2 * MARGIN - 2 * gap_b) / 3))
+    row2_y, row2_h = Inches(3.05), Inches(1.05)
+    c1 = _diagram_node(slide, MARGIN, row2_y, row2_w, row2_h, "train_classifier.py", "RF vs Gradient Boosting ->\nmodel + EER threshold", border=TEAL)
+    c2 = _diagram_node(slide, MARGIN + 1 * (row2_w + gap_b), row2_y, row2_w, row2_h, "index_embeddings.py", "standardize ->\nk-NN embeddings", border=TEAL)
+    c3 = _diagram_node(slide, MARGIN + 2 * (row2_w + gap_b), row2_y, row2_w, row2_h, "kafka_producer.py ->\nstreaming_enrichment.py", "near-real-time scoring", border=TEAL)
+    for c in (c1, c2, c3):
+        _arrow(slide, b4.left + b4.width // 2, b4.top + b4.height, c.left + c.width // 2, c.top)
+
+    row3_w = Emu(int((SLIDE_W - 2 * MARGIN - gap_b) / 2))
+    row3_y, row3_h = Inches(4.75), Inches(0.85)
+    d1 = _diagram_node(slide, MARGIN, row3_y, row3_w, row3_h, "insights.py", "aggregations -> charts + RESULTS.md", border=RED)
+    d2 = _diagram_node(slide, MARGIN + row3_w + gap_b, row3_y, row3_w, row3_h, "Flask app", "/classify + /dashboard", border=RED)
+    for src, dst in [(c1, d1), (c1, d2), (c2, d2), (c3, d1), (c3, d2)]:
+        _arrow(slide, src.left + src.width // 2, src.top + src.height, dst.left + dst.width // 2, dst.top)
+
+    add_button(slide, "View exact diagram in DESIGN.md",
+               "https://github.com/HadarBaum/asvspoof-voice-ai/blob/main/docs/DESIGN.md",
+               MARGIN, Inches(5.95), width=Inches(4.3), height=Inches(0.5), color=NAVY)
+    _textbox(slide, MARGIN + Inches(4.6), Inches(6.08), SLIDE_W - MARGIN - Inches(4.6) - MARGIN, Inches(0.4),
+             "Same architecture as the Mermaid flowchart in docs/DESIGN.md, redrawn natively for the deck.",
+             size=11, color=MUTED)
+
+    # --- 3c. Pipeline stage - ingest -----------------------------------------
+    slide = add_header(prs, "Pipeline stage 0-1 - Ingest", "Kaggle corpus -> MinIO object store", slide_num=next_num())
+    add_bullets(slide, [
+        "download_dataset.py pulls the ASVspoof2019 LA corpus (~121k flac files) from Kaggle via its API "
+        "into data/raw/ — a one-time step, gated on a Kaggle API token.",
+        "ingest_to_minio.py uploads every labeled utterance into MinIO, an S3-compatible object store, "
+        "keyed by partition and filename.",
+        "32 concurrent upload threads by default — this step is I/O-bound (many small files), so "
+        "threading helps a lot even though Python threads don't parallelize CPU work.",
+        "Downstream steps (the Spark job, the streaming consumer, the Flask app) always fetch audio by "
+        "key from MinIO, never the local filesystem — any worker, anywhere, can read a clip.",
+        "Protocol metadata (speaker id, attack id, bonafide/spoof label) stays in small local text files "
+        "— only the audio bytes, the actually \"big\" unstructured data, go into the object store.",
+    ], size=17)
+
+    # --- 3d. Pipeline stage - transform (Spark) ------------------------------
+    slide = add_header(prs, "Pipeline stage 2 - Transform", "Spark batch feature extraction — the actual \"big data\" step", slide_num=next_num())
+    add_bullets(slide, [
+        "batch_feature_extraction.py reads the train+dev protocol metadata and fans out across Spark "
+        "executors, one task per partition of utterances.",
+        "Each executor fetches its share of clips' audio bytes from MinIO and computes a fixed-length "
+        "acoustic feature vector (20 MFCCs + spectral/pitch/energy statistics) via common.features."
+        "extract_features — the same function used everywhere else in this project.",
+        "~50k train+dev audio files decoded and feature-extracted in parallel across cores instead of "
+        "one Python process working through them serially — this is the real \"big data\" step, not "
+        "model training itself.",
+        "Driver and executors are both pinned to sys.executable so Spark workers resolve the same "
+        "Python/venv as the driver, instead of whatever `python` happens to be on PATH.",
+    ], size=17)
+
+    # --- 3d(ii). Pipeline stage 2 - what's in the feature vector -------------
+    slide = add_header(prs, "What's in the feature vector", "53 numbers per clip — one shared function, one fixed shape", slide_num=next_num())
+    add_table(
+        slide,
+        ["Group", "Count", "What it captures"],
+        [
+            ["MFCCs (20 coeffs × mean/std)", "40", "Vocal-tract spectral envelope — timbre/voice quality, the model's top group"],
+            ["Spectral shape (centroid/bandwidth/rolloff)", "6", "Brightness, spread, and energy roll-off of the spectrum"],
+            ["Signal level (zero-crossing rate, RMS energy)", "4", "Noisiness and loudness over time"],
+            ["Pitch (F0, 50-500Hz via librosa.yin)", "2", "Fundamental frequency mean/std, human vocal range"],
+            ["Duration", "1", "Clip length in seconds"],
+            ["Total", "53", "One fixed-length row per clip, any duration"],
+        ],
+        top=Inches(1.5),
+        col_widths=[2.7, 0.7, 4.9],
+        highlight_rows={5},
+    )
+    add_bullets(slide, [
+        "Mean + std of frame-level features, not raw sequences — every clip, any length, maps to the "
+        "same 53-column row a tabular classifier expects.",
+        "One function, common/features.py:extract_features(), computes this for the Spark batch job, "
+        "the Kafka consumer, and the live /classify endpoint — training and inference match exactly.",
+        "Pitch uses plain librosa.yin, not pyin — pyin's HMM smoothing measured 2-9s/clip; across 50k+ "
+        "clips, yin gets a comparable signal in ~0.02s.",
+    ], top=Inches(5.75), size=13)
+
+    # --- 3e. Pipeline stage - load --------------------------------------------
+    slide = add_header(prs, "Pipeline stage 2 - Load", "Feature table -> Parquet + Elasticsearch", slide_num=next_num())
+    add_bullets(slide, [
+        "Every feature row the Spark job computes is written to two places at once, in the same run.",
+        "Parquet (pipeline/features_train_dev.parquet) — the input train_classifier.py and "
+        "index_embeddings.py train from.",
+        "Elasticsearch's asvspoof-training-features index — the same rows, so aggregations/insights can "
+        "run without re-reading Parquet.",
+        "Elasticsearch (a NoSQL document store) goes on to hold training results, live streamed "
+        "predictions, and — once standardized — dense_vector embeddings for k-NN search, all in the "
+        "same cluster.",
+    ], size=17)
+
     # --- 4. AI capability: classification + threshold fix -----------------
     slide = add_header(prs, "AI capability 1 — classification", "Random Forest vs. Gradient Boosting, picked by EER", slide_num=next_num())
     add_bullets(slide, [
@@ -402,6 +552,19 @@ def main():
         ], top=Inches(3.55), size=16)
     else:
         add_bullets(slide, ["Run the pipeline and re-generate slides for real numbers."])
+
+    # --- 6b. Pipeline stage - insights ---------------------------------------
+    slide = add_header(prs, "Pipeline stage 5 - Insights", "insights.py — Elasticsearch aggregations -> charts + RESULTS.md", slide_num=next_num())
+    add_bullets(slide, [
+        "Runs after the streaming consumer has written predictions — every number here is a live "
+        "Elasticsearch aggregation query, nothing hand-typed or invented.",
+        "Computes overall and per-attack-type (A01–A19) detection accuracy, a confusion matrix, a "
+        "confidence histogram, and class balance.",
+        "Writes both a markdown report (docs/RESULTS.md) and the PNG charts /dashboard reuses — safe to "
+        "re-run any time after a pipeline run (sample or full-scale) to regenerate real results.",
+        "The confusion matrix, confidence histogram, and accuracy-by-attack charts on the next slides "
+        "are this script's direct output, not hand-drawn.",
+    ], size=17)
 
     # --- 7. Results: ROC curve + confusion matrix ---------------------------
     slide = add_header(prs, "Results — ROC curve & confusion matrix", slide_num=next_num())
