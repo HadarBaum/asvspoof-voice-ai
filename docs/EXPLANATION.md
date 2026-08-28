@@ -58,9 +58,14 @@ resamples to 16kHz mono, and computes:
   frequency spectrum,
 - zero-crossing rate (mean + std) — how "noisy"/high-frequency the signal is,
 - RMS energy (mean + std),
-- pitch (F0) mean + std via `librosa.pyin` — TTS/VC systems often produce
-  unnaturally stable pitch (no vibrato), which is one of the more informative
-  features (see feature importances in `docs/RESULTS.md`),
+- pitch (F0) mean + std via `librosa.yin` over a 50-500Hz human-voice range —
+  TTS/VC systems often produce unnaturally stable pitch (no vibrato), so
+  `pitch_std` in particular is an informative feature (see feature importances in
+  `docs/RESULTS.md`). Note this is plain `yin`, **not** `pyin`: `pyin` adds
+  probabilistic HMM smoothing over a 4+ octave range and measured ~2-9s per clip,
+  which is many hours across 50k+ clips, while `yin` over a narrower range with a
+  larger `hop_length` gets comparable signal in ~0.02s (see the comment in
+  `common/features.py` for the full reasoning),
 - clip duration.
 
 Mean/std of frame-level features (rather than the raw frame sequences) gives every
