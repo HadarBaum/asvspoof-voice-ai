@@ -12,6 +12,7 @@ Usage:
     python -m pipeline.insights
 """
 
+import json
 import os
 
 import matplotlib
@@ -149,7 +150,9 @@ def main():
     per_class_recall = {}
     for idx, label in enumerate(labels):
         support = matrix[idx].sum()
-        per_class_recall[label] = matrix[idx, idx] / support if support else float("nan")
+        # float() rather than leaving these as numpy scalars: they get written to
+        # streaming_metrics.json below, and json can't serialize numpy types.
+        per_class_recall[label] = float(matrix[idx, idx] / support) if support else float("nan")
     balanced_accuracy = float(np.nanmean(list(per_class_recall.values())))
 
     support_per_class = matrix.sum(axis=1)
@@ -218,7 +221,29 @@ def main():
     with open(out_path, "w") as f:
         f.write("\n".join(lines) + "\n")
 
+    # --- machine-readable eval metrics, for the slide deck --------------------
+    # docs/slides/generate_slides.py otherwise only had docs/training_metrics.json
+    # to read, which is dev-only - so every number on every slide was a dev number
+    # and the eval-set accuracy appeared nowhere in the deck at all. Writing these
+    # here keeps the deck's numbers generated rather than hand-typed, same as
+    # RESULTS.md above, so re-running the pipeline updates the slides too.
+    stream_path = os.path.join(DOCS_DIR, "streaming_metrics.json")
+    with open(stream_path, "w") as f:
+        json.dump(
+            {
+                "n_predictions": int(n_predictions),
+                "balanced_accuracy": balanced_accuracy,
+                "overall_accuracy": float(overall_accuracy),
+                "recall_by_class": per_class_recall,
+                "majority_label": majority_label,
+                "majority_baseline": float(majority_share),
+            },
+            f,
+            indent=2,
+        )
+
     print(f"Wrote {out_path}")
+    print(f"Wrote {stream_path}")
     print(f"Wrote charts to {CHARTS_DIR}")
 
 

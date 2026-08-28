@@ -1,0 +1,11 @@
+{
+  "n_predictions": 2000,
+  "balanced_accuracy": 0.893361581920904,
+  "overall_accuracy": 0.8475,
+  "recall_by_class": {
+    "bonafide": 0.9533898305084746,
+    "spoof": 0.8333333333333334
+  },
+  "majority_label": "spoof",
+  "majority_baseline": 0.882
+}
