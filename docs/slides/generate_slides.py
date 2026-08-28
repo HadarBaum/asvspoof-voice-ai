@@ -27,6 +27,10 @@ from pptx.util import Emu, Inches, Pt
 DOCS_DIR = os.path.join(os.path.dirname(__file__), "..")
 METRICS_PATH = os.path.join(DOCS_DIR, "training_metrics.json")
 COMPARISON_PATH = os.path.join(DOCS_DIR, "model_comparison.json")
+# Eval-partition headline numbers, written by pipeline/insights.py. The two files
+# above are dev-only, so without this the deck had no eval-set accuracy on it at
+# all - only the per-attack bar chart, which shows bars but states no number.
+STREAMING_PATH = os.path.join(DOCS_DIR, "streaming_metrics.json")
 CHARTS_DIR = os.path.join(DOCS_DIR, "..", "app", "static", "charts")
 OUT_PATH = os.path.join(os.path.dirname(__file__), "slides.pptx")
 
@@ -329,6 +333,7 @@ def add_image_row(slide, image_paths, top=Inches(1.55), caption=None):
 def main():
     metrics = load_json(METRICS_PATH)
     comparison = load_json(COMPARISON_PATH)
+    streaming = load_json(STREAMING_PATH)
 
     prs = Presentation()
     prs.slide_width = SLIDE_W
@@ -350,6 +355,8 @@ def main():
     _textbox(slide, Inches(1), Inches(4.65), Inches(11.3), Inches(0.5),
              "MinIO · Apache Spark · Apache Kafka · Elasticsearch · scikit-learn · Flask",
              size=14, color=TEAL)
+    _textbox(slide, Inches(1), Inches(6.35), Inches(11.3), Inches(0.5),
+             "Beny Rojanski  ·  Renana Chaba  ·  Hadar Baum", size=17, color=WHITE)
 
     # --- 2. Problem & dataset -------------------------------------------------
     slide = add_header(prs, "Problem & dataset", slide_num=next_num())
@@ -534,8 +541,14 @@ def main():
         p.font.size = Pt(13)
         p.font.color.rgb = NAVY
 
-    # --- 6. Results: the accuracy paradox, found and fixed -----------------
-    slide = add_header(prs, "Results — the accuracy paradox, found and fixed", slide_num=next_num())
+    # --- 6. Results on dev: the accuracy paradox, found and fixed -----------
+    # Slide order note: results are split by which partition produced them. The dev
+    # results (this slide and the next) come from train_classifier.py and belong here,
+    # next to the EER slide they depend on. The streamed-eval results come from
+    # insights.py reading the predictions index, which only exists once the Kafka
+    # consumer has run - so they sit after the streaming-enrichment slide instead of
+    # before it. Nothing here should forward-reference a component not yet introduced.
+    slide = add_header(prs, "Results on dev — the accuracy paradox, found and fixed", slide_num=next_num())
     if metrics:
         add_stat_cards(slide, [
             (f"{metrics['recall_bonafide_dev_default_threshold_0.5']:.0%}", "Bonafide recall\nat default 0.5 threshold", RED),
@@ -547,44 +560,21 @@ def main():
             "toward the majority class: it caught spoof reliably, bonafide much less so.",
             "Fix: the model artifact now stores its own EER-optimal decision threshold, used everywhere "
             "(streaming consumer, web app) instead of scikit-learn's default 0.5.",
-            "Independently re-confirmed on live Kafka-streamed eval data, not just the dev set it was tuned "
-            "on — bonafide accuracy went 29.7% → 91.5% on the streamed sample too.",
+            "This same fix is re-confirmed further on, on live Kafka-streamed eval data — not only on the "
+            "dev set the threshold was chosen from. See the streamed-eval results later in the deck.",
         ], top=Inches(3.55), size=16)
     else:
         add_bullets(slide, ["Run the pipeline and re-generate slides for real numbers."])
 
-    # --- 6b. Pipeline stage - insights ---------------------------------------
-    slide = add_header(prs, "Pipeline stage 5 - Insights", "insights.py — Elasticsearch aggregations -> charts + RESULTS.md", slide_num=next_num())
-    add_bullets(slide, [
-        "Runs after the streaming consumer has written predictions — every number here is a live "
-        "Elasticsearch aggregation query, nothing hand-typed or invented.",
-        "Computes overall and per-attack-type (A01–A19) detection accuracy, a confusion matrix, a "
-        "confidence histogram, and class balance.",
-        "Writes both a markdown report (docs/RESULTS.md) and the PNG charts /dashboard reuses — safe to "
-        "re-run any time after a pipeline run (sample or full-scale) to regenerate real results.",
-        "The confusion matrix, confidence histogram, and accuracy-by-attack charts on the next slides "
-        "are this script's direct output, not hand-drawn.",
-    ], size=17)
-
-    # --- 7. Results: ROC curve + confusion matrix ---------------------------
-    slide = add_header(prs, "Results — ROC curve & confusion matrix", slide_num=next_num())
+    # --- 7. Results on dev: ROC curve + feature importance ------------------
+    slide = add_header(prs, "Results on dev — ROC curve & what the model learned", slide_num=next_num())
     add_image_row(slide, [
         os.path.join(CHARTS_DIR, "roc_curve.png"),
-        os.path.join(CHARTS_DIR, "confusion_matrix.png"),
-    ], caption="Left: both candidate models, deployed model's EER point marked. Right: streamed eval predictions.")
-
-    # --- 8. Results: feature importance + confidence calibration ------------
-    slide = add_header(prs, "Results — what the model learned, and how sure it is", slide_num=next_num())
-    add_image_row(slide, [
         os.path.join(CHARTS_DIR, "feature_importance.png"),
-        os.path.join(CHARTS_DIR, "confidence_histogram.png"),
-    ], caption="Left: top acoustic features (MFCC variance dominates). Right: confidence, correct vs. incorrect calls.")
+    ], caption="Both from the dev partition. Left: both candidate models, deployed model's EER point marked. "
+               "Right: top acoustic features — MFCC variance dominates.")
 
-    # --- 9. Results: accuracy by attack type --------------------------------
-    slide = add_header(prs, "Results — accuracy by attack type", "Streamed eval predictions, near-perfect on most TTS/VC systems", slide_num=next_num())
-    add_image_row(slide, [os.path.join(CHARTS_DIR, "accuracy_by_attack.png")])
-
-    # --- 10. AI capability: embeddings + semantic search ---------------------
+    # --- 8. AI capability: embeddings + semantic search ---------------------
     slide = add_header(prs, "AI capability 2 — embeddings & semantic search", slide_num=next_num())
     add_bullets(slide, [
         "The same acoustic feature vectors double as embeddings — no separate embedding model needed.",
@@ -596,7 +586,7 @@ def main():
         "the browser, replacing a keyword match with genuine semantic search.",
     ])
 
-    # --- 11. AI capability: streaming enrichment -----------------------------
+    # --- 9. AI capability: streaming enrichment -----------------------------
     slide = add_header(prs, "AI capability 3 — streaming enrichment", "Kafka producer/consumer, near-real-time scoring", slide_num=next_num())
     add_bullets(slide, [
         "Producer replays eval-set utterance events (a MinIO key, not the audio itself).",
@@ -605,7 +595,52 @@ def main():
         "Same feature-extraction and model code as the batch job and the web app — one implementation "
         "applied three ways, not three separate things to maintain and defend.",
         "A named consumer group tracks offset, so re-running resumes instead of re-scoring.",
+        "Everything on the next three slides is scored here, on the eval partition — attacks A07–A19, "
+        "synthesis systems the model never saw during training.",
     ])
+
+    # --- 10. Pipeline stage - insights --------------------------------------
+    slide = add_header(prs, "Pipeline stage 5 - Insights", "insights.py — Elasticsearch aggregations -> charts + RESULTS.md", slide_num=next_num())
+    add_bullets(slide, [
+        "Runs after the streaming consumer has written predictions — every number here is a live "
+        "Elasticsearch aggregation query, nothing hand-typed or invented.",
+        "Computes balanced and overall detection accuracy, per-attack-type accuracy, a confusion matrix, "
+        "a confidence histogram, and class balance.",
+        "Writes both a markdown report (docs/RESULTS.md) and the PNG charts /dashboard reuses — safe to "
+        "re-run any time after a pipeline run (sample or full-scale) to regenerate real results.",
+        "The confusion matrix, confidence histogram, and accuracy-by-attack charts on the next slides "
+        "are this script's direct output, not hand-drawn. The ROC and feature-importance charts shown "
+        "earlier come from train_classifier.py instead, since those need the model's own dev predictions.",
+    ], size=17)
+
+    # --- 11. Results on streamed eval: confusion matrix + calibration -------
+    slide = add_header(prs, "Results on streamed eval — confusion matrix & confidence", slide_num=next_num())
+    add_image_row(slide, [
+        os.path.join(CHARTS_DIR, "confusion_matrix.png"),
+        os.path.join(CHARTS_DIR, "confidence_histogram.png"),
+    ], caption="Both from the streamed eval predictions. Left: true vs. predicted counts. "
+               "Right: confidence on correct vs. incorrect calls — some are confidently wrong.")
+
+    # --- 12. Results on streamed eval: headline accuracy + by attack type ---
+    slide = add_header(prs, "Results on streamed eval — accuracy by attack type", "Near-perfect on most TTS/VC systems; A17/A18/A19 are the hard ones", slide_num=next_num())
+    if streaming:
+        # The last card is the point of the other three: on a partition this skewed,
+        # a do-nothing baseline beats our own raw accuracy, so balanced accuracy is
+        # the honest headline. Showing the baseline next to it makes that checkable
+        # by the audience instead of something they have to take on trust.
+        add_stat_cards(slide, [
+            (f"{streaming['balanced_accuracy']:.1%}", "Balanced accuracy\n(mean of per-class recalls)", TEAL),
+            (f"{streaming['recall_by_class']['bonafide']:.1%}", "Bonafide recall\n(real human speech)", BLUE),
+            (f"{streaming['recall_by_class']['spoof']:.1%}", "Spoof recall\n(AI-generated speech)", BLUE),
+            (f"{streaming['majority_baseline']:.1%}", f"Always-{streaming['majority_label']} baseline\nbeats raw accuracy ({streaming['overall_accuracy']:.1%})", RED),
+        ], card_h=Inches(1.6))
+        add_image_row(slide, [os.path.join(CHARTS_DIR, "accuracy_by_attack.png")], top=Inches(3.4),
+                      caption=f"All figures from the {streaming['n_predictions']} streamed eval predictions "
+                              f"(attacks A07–A19, unseen during training).")
+    else:
+        add_image_row(slide, [os.path.join(CHARTS_DIR, "accuracy_by_attack.png")],
+                      caption="(run pipeline/insights.py to generate docs/streaming_metrics.json "
+                              "and the headline accuracy cards)")
 
     # --- 12. Live demo -------------------------------------------------------
     slide = add_header(prs, "Live demo", slide_num=next_num())
@@ -626,8 +661,9 @@ def main():
     # --- 13. Challenges & trade-offs ------------------------------------------
     slide = add_header(prs, "Challenges & trade-offs", slide_num=next_num())
     add_bullets(slide, [
-        "Windows + Spark: worker Python resolution, path-with-spaces, and a Docker Desktop networking "
-        "quirk all broke Spark's driver↔executor RPC — diagnosed and fixed, not hidden.",
+        "Windows + Spark: worker Python resolution, a path with spaces, a pyspark 3.5.1 / Python 3.12 "
+        "incompatibility, and a removed distutils — four environment bugs, none in our own logic, all "
+        "diagnosed and fixed rather than worked around.",
         "The EER threshold trades some spoof recall for bonafide recall — a deliberate choice, not a "
         "free win: no single threshold maximizes both on an imbalanced dataset.",
         "Embedding is the classifier's own feature vector, not a separate pretrained audio embedding "
@@ -641,14 +677,15 @@ def main():
     _rect(slide, 0, 0, SLIDE_W, SLIDE_H, NAVY)
     _rect(slide, 0, Inches(3.7), SLIDE_W, Pt(5), TEAL)
     _textbox(slide, Inches(1), Inches(2.5), Inches(11.3), Inches(1.0), "Questions?", size=40, bold=True, color=WHITE)
-    link_box = slide.shapes.add_textbox(Inches(1), Inches(3.55), Inches(8), Inches(0.5))
+    # The teal rule sits at y=3.70; this link used to start at y=3.55, so the rule
+    # cut straight through the text. Moved below the rule with clearance.
+    link_box = slide.shapes.add_textbox(Inches(1), Inches(4.15), Inches(8), Inches(0.5))
     lp = link_box.text_frame.paragraphs[0]
     lp.text = "github.com/HadarBaum/asvspoof-voice-ai"
     lp.font.size = Pt(16)
     lp.font.color.rgb = LIGHT_TEXT
     lp.font.name = FONT
     lp.runs[0].hyperlink.address = "https://github.com/HadarBaum/asvspoof-voice-ai"
-    add_button(slide, "▶  Open the live demo", "http://localhost:5000", Inches(1), Inches(4.3))
 
     prs.save(OUT_PATH)
     print(f"Wrote {OUT_PATH} ({len(prs.slides)} slides)")
