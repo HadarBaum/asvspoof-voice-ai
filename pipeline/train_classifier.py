@@ -39,6 +39,7 @@ import pandas as pd
 from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.metrics import (
     accuracy_score,
+    balanced_accuracy_score,
     classification_report,
     f1_score,
     precision_score,
@@ -81,14 +82,26 @@ def compute_eer(y_true_spoof, y_score_spoof):
 
 
 def evaluate_at_threshold(y_dev, y_proba_spoof, threshold):
+    """Both classes, both directions, at one operating point.
+
+    The bonafide *precision* and F1 entries were missing here originally, which meant
+    the cost of moving off the 0.5 threshold was not recorded anywhere: only the
+    bonafide recall gain (80.2% -> 90.7%) was persisted, not the precision drop that
+    pays for it (69.1% -> 52.8%). The deck's threshold trade-off table needs both
+    sides to be honest, and balanced_accuracy is the one headline that improves,
+    so it is stored rather than recomputed by every consumer.
+    """
     y_pred = (y_proba_spoof >= threshold).astype(int)
     return {
         "threshold": threshold,
         "accuracy": accuracy_score(y_dev, y_pred),
+        "balanced_accuracy": balanced_accuracy_score(y_dev, y_pred),
         "precision_spoof": precision_score(y_dev, y_pred, zero_division=0),
         "recall_spoof": recall_score(y_dev, y_pred, zero_division=0),
-        "recall_bonafide": recall_score(y_dev, y_pred, pos_label=0, zero_division=0),
         "f1_spoof": f1_score(y_dev, y_pred, zero_division=0),
+        "precision_bonafide": precision_score(y_dev, y_pred, pos_label=0, zero_division=0),
+        "recall_bonafide": recall_score(y_dev, y_pred, pos_label=0, zero_division=0),
+        "f1_bonafide": f1_score(y_dev, y_pred, pos_label=0, zero_division=0),
     }
 
 

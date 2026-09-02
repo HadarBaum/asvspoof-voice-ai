@@ -1,6 +1,6 @@
 # 10-minute presentation script
 
-Script for the 20-slide deck in `docs/slides/slides.pptx`.
+Script for the 19-slide deck in `docs/slides/slides.pptx`.
 Hebrew version: `docs/PRESENTATION_SCRIPT.he.md`.
 
 ## How to use this document
@@ -33,7 +33,7 @@ when you reach it, cut the similar-clips playback — never the threshold story.
 | Section | Slides | Ends at |
 |---|---|---|
 | Problem & dataset | 1 | 0:45 |
-| Architecture + diagram | 2 | 1:30 |
+| Architecture diagram | 1 | 1:20 |
 | Ingest / Transform / Features / Load | 4 | 3:00 |
 | Classification + EER | 2 | 4:00 |
 | Results on dev — the accuracy paradox | 1 | 5:30 |
@@ -79,9 +79,10 @@ Excluding PA cost us half the available data. The alternative was worse: PA
 mislabels "a human recording played back" as AI, which is a different and false
 claim. We would rather defend a smaller honest scope.
 
-## 0:45 — 1:30 · Architecture + Architecture diagram
+## 0:45 — 1:20 · Architecture diagram
 
-> [Advance through both architecture slides together.]
+> [One slide now — the bullet-list version was removed. Every pipeline stage
+> repeats this diagram with its own box highlighted, so you can point back to it.]
 >
 > Five course technologies, each doing real work. MinIO is the object store
 > holding raw audio. Spark does the heavy batch feature extraction.
@@ -112,7 +113,7 @@ cutoff. Centralizing the model *and its threshold* into one artifact is what mad
 the threshold fix take effect everywhere at once instead of needing to be
 remembered at every call site.
 
-## 1:30 — 3:00 · Ingest → Transform → Feature vector → Load
+## 1:20 — 3:00 · Ingest → Transform → Feature vector → Load
 
 > [Four slides. Keep moving — roughly 22 seconds each.]
 >
@@ -232,6 +233,8 @@ that the comparison is nearly free. Full numbers in `docs/model_comparison.json`
 > things human, including some spoofs we used to catch. That is a real trade. You
 > cannot maximize both classes at once on imbalanced data; you can only choose
 > where on the ROC curve to sit. We chose the principled point over the default.
+
+**The slide now carries the trade-off table**, generated from `model_comparison.json`: bonafide recall 80.2% -> 90.7%, bonafide precision 69.1% -> 52.8%, spoof recall 95.9% -> 90.7%, accuracy 94.3% -> 90.7%, balanced accuracy 88.0% -> 90.7% (the highlighted row). Three of those five get worse — point at the balanced-accuracy row when defending the choice, since it is the one headline that improves and it is the same metric the eval slides lead with.
 
 **DEEPER.** The original Random Forest report, for reference:
 
