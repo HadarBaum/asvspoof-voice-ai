@@ -143,13 +143,15 @@ def add_header(prs, title, subtitle=None, slide_num=None):
     return slide
 
 
-def add_bullets(slide, bullets, top=Inches(1.55), width=None, size=19):
+def add_bullets(slide, bullets, top=Inches(1.55), width=None, size=19, height=None):
     """Every bullet is one complete sentence/point, same size and color -
     PowerPoint's own word-wrap (word_wrap=True below) handles long lines by
     wrapping onto a second visual line automatically, so there's no need to
     (and no reason to) manually pre-split long bullets into fragments."""
     width = width or (SLIDE_W - 2 * MARGIN)
-    box = slide.shapes.add_textbox(MARGIN, top, width, SLIDE_H - top - Inches(0.5))
+    # height is passed on the pipeline-stage slides, where the architecture strip
+    # occupies the foot of the slide and the text must stop short of it.
+    box = slide.shapes.add_textbox(MARGIN, top, width, height or (SLIDE_H - top - Inches(0.5)))
     tf = box.text_frame
     tf.word_wrap = True
     for i, bullet in enumerate(bullets):
@@ -182,23 +184,30 @@ def add_button(slide, text, url, left, top, width=Inches(3.6), height=Inches(0.6
     return shape
 
 
-def _diagram_node(slide, left, top, width, height, title, subtitle=None, fill=CARD_BG, border=TEAL):
+def _diagram_node(slide, left, top, width, height, title, subtitle=None, fill=CARD_BG, border=TEAL,
+                  text_color=DARK_TEXT, title_size=Pt(12.5)):
     """A flowchart box for the architecture diagram - a rounded rect with a bold
-    title and an optional smaller gray subtitle line underneath."""
+    title and an optional smaller gray subtitle line underneath.
+
+    text_color and title_size exist so draw_architecture() can render the same node
+    filled-and-inverted when it is the highlighted stage, and at smaller type for the
+    compact strip on the pipeline-stage slides."""
     box = _rounded_rect(slide, left, top, width, height, fill, border_color=border)
     tf = box.text_frame
     tf.word_wrap = True
     tf.vertical_anchor = MSO_ANCHOR.MIDDLE
-    tf.margin_left = Inches(0.08)
-    tf.margin_right = Inches(0.08)
+    tf.margin_left = Inches(0.06)
+    tf.margin_right = Inches(0.06)
+    tf.margin_top = 0
+    tf.margin_bottom = 0
     # split on "\n" into real paragraphs - a single run's embedded "\n" doesn't
     # render as a line break in OOXML (see add_stat_cards for the same fix).
     for i, line in enumerate(title.split("\n")):
         p = tf.paragraphs[0] if i == 0 else tf.add_paragraph()
         p.text = line
-        p.font.size = Pt(12.5)
+        p.font.size = title_size
         p.font.bold = True
-        p.font.color.rgb = DARK_TEXT
+        p.font.color.rgb = text_color
         p.font.name = FONT
         p.alignment = PP_ALIGN.CENTER
     if subtitle:
@@ -210,6 +219,91 @@ def _diagram_node(slide, left, top, width, height, title, subtitle=None, fill=CA
             sp.font.name = FONT
             sp.alignment = PP_ALIGN.CENTER
     return box
+
+
+# --- architecture topology, defined once -------------------------------------
+# Drawn at two sizes by draw_architecture(): full-slide on the architecture slide,
+# and as a compact bottom strip on every pipeline-stage slide with that stage's node
+# highlighted. Defining the topology once is the point - a hand-drawn strip per slide
+# would drift out of sync with the real diagram the first time the pipeline changed.
+# Each node: (id, full title, subtitle, short label for the compact strip).
+ARCH_ROWS = [
+    [
+        ("kaggle", "Kaggle: ASVspoof2019 LA", "download_dataset.py", "Kaggle"),
+        ("minio", "MinIO", "object store - raw audio", "MinIO"),
+        ("spark", "Spark", "batch_feature_extraction.py", "Spark"),
+        ("features", "Parquet +\nElasticsearch", "feature table", "Parquet + ES"),
+    ],
+    [
+        ("train", "train_classifier.py", "RF vs Gradient Boosting ->\nmodel + EER threshold", "train_classifier"),
+        ("embed", "index_embeddings.py", "standardize ->\nk-NN embeddings", "index_embeddings"),
+        ("stream", "kafka_producer.py ->\nstreaming_enrichment.py", "near-real-time scoring", "kafka -> streaming"),
+    ],
+    [
+        ("insights", "insights.py", "aggregations -> charts + RESULTS.md", "insights.py"),
+        ("flask", "Flask app", "/classify + /dashboard", "Flask app"),
+    ],
+]
+ARCH_EDGES = [
+    ("kaggle", "minio"), ("minio", "spark"), ("spark", "features"),
+    ("features", "train"), ("features", "embed"), ("features", "stream"),
+    ("train", "insights"), ("train", "flask"),
+    ("embed", "flask"),
+    ("stream", "insights"), ("stream", "flask"),
+]
+ARCH_ROW_BORDER = [BLUE, TEAL, RED]
+
+
+def draw_architecture(slide, top, height, highlight=None, compact=False):
+    """Draw the pipeline topology scaled into the band starting at `top`, `height` tall.
+
+    highlight: node id to render filled teal with inverted text, so a stage slide can
+    show where it sits in the whole pipeline. compact=True drops the subtitles and uses
+    the short labels and smaller type, for the strip at the foot of the stage slides.
+    """
+    row_gap = Inches(0.2) if compact else Inches(0.55)
+    n_rows = len(ARCH_ROWS)
+    row_h = Emu(int((height - row_gap * (n_rows - 1)) / n_rows))
+    col_gap = Inches(0.16) if compact else Inches(0.25)
+    boxes = {}
+    for r, row in enumerate(ARCH_ROWS):
+        row_y = top + r * (row_h + row_gap)
+        node_w = Emu(int((SLIDE_W - 2 * MARGIN - col_gap * (len(row) - 1)) / len(row)))
+        for c, (node_id, title, subtitle, short) in enumerate(row):
+            on = node_id == highlight
+            boxes[node_id] = _diagram_node(
+                slide,
+                MARGIN + c * (node_w + col_gap), row_y, node_w, row_h,
+                short if compact else title,
+                None if compact else subtitle,
+                fill=TEAL if on else CARD_BG,
+                border=TEAL if on else ARCH_ROW_BORDER[r],
+                text_color=WHITE if on else DARK_TEXT,
+                title_size=Pt(8.5) if compact else Pt(12.5),
+            )
+    for src, dst in ARCH_EDGES:
+        a, b = boxes[src], boxes[dst]
+        if a.top == b.top:  # same row: connect left-to-right
+            _arrow(slide, a.left + a.width, a.top + a.height // 2, b.left, b.top + b.height // 2,
+                   width=1.0 if compact else 1.25)
+        else:  # across rows: connect bottom-to-top
+            _arrow(slide, a.left + a.width // 2, a.top + a.height, b.left + b.width // 2, b.top,
+                   width=1.0 if compact else 1.25)
+    return boxes
+
+
+# Vertical band the compact strip occupies on a pipeline-stage slide, and the
+# matching bullet height so text never runs into it.
+STRIP_TOP = Inches(5.35)
+STRIP_H = Inches(1.85)
+STRIP_BULLET_H = STRIP_TOP - Inches(1.55) - Inches(0.15)
+
+
+def add_stage_strip(slide, highlight):
+    """The compact architecture strip plus its one-line legend, for a stage slide."""
+    _textbox(slide, MARGIN, STRIP_TOP - Inches(0.28), SLIDE_W - 2 * MARGIN, Inches(0.25),
+             "Where this stage sits in the pipeline:", size=10, color=MUTED)
+    draw_architecture(slide, STRIP_TOP, STRIP_H, highlight=highlight, compact=True)
 
 
 def _arrow(slide, x1, y1, x2, y2, color=MUTED, width=1.25):
@@ -367,45 +461,13 @@ def main():
         "PA (replay-attack) partition intentionally excluded — not AI-generated speech",
     ])
 
-    # --- 3. Architecture --------------------------------------------------
-    slide = add_header(prs, "Architecture", "Object store → Spark → model → streaming → Elasticsearch → Flask", slide_num=next_num())
-    add_bullets(slide, [
-        "MinIO (object store) holds the raw audio corpus",
-        "Spark (batch, parallel across cores) extracts acoustic features from every clip",
-        "Two models trained and compared — the better one (by EER) is deployed",
-        "Elasticsearch (NoSQL): features + embeddings, training results, live predictions",
-        "Kafka streams simulated incoming audio; a consumer scores each event in near-real-time",
-        "Flask app: /classify (upload or record live, + similar-clip search) and /dashboard (insights)",
-    ])
+    # --- 3. Architecture diagram ---------------------------------------------
+    # The bullet-list "Architecture" slide that used to precede this was removed: it
+    # restated in prose what the diagram shows, and every stage now carries its own
+    # highlighted copy of the diagram anyway.
+    slide = add_header(prs, "Architecture", "The full pipeline, end to end - object store to serving", slide_num=next_num())
 
-    # --- 3b. Architecture diagram --------------------------------------------
-    slide = add_header(prs, "Architecture diagram", "The full pipeline, end to end - object store to serving", slide_num=next_num())
-
-    gap_a = Inches(0.25)
-    row1_w = Emu(int((SLIDE_W - 2 * MARGIN - 3 * gap_a) / 4))
-    row1_y, row1_h = Inches(1.5), Inches(0.95)
-    b1 = _diagram_node(slide, MARGIN, row1_y, row1_w, row1_h, "Kaggle: ASVspoof2019 LA", "download_dataset.py", border=BLUE)
-    b2 = _diagram_node(slide, MARGIN + 1 * (row1_w + gap_a), row1_y, row1_w, row1_h, "MinIO", "object store - raw audio", border=BLUE)
-    b3 = _diagram_node(slide, MARGIN + 2 * (row1_w + gap_a), row1_y, row1_w, row1_h, "Spark", "batch_feature_extraction.py", border=BLUE)
-    b4 = _diagram_node(slide, MARGIN + 3 * (row1_w + gap_a), row1_y, row1_w, row1_h, "Parquet +\nElasticsearch", "feature table", border=BLUE)
-    for a, b in [(b1, b2), (b2, b3), (b3, b4)]:
-        _arrow(slide, a.left + a.width, a.top + a.height // 2, b.left, b.top + b.height // 2)
-
-    gap_b = Inches(0.3)
-    row2_w = Emu(int((SLIDE_W - 2 * MARGIN - 2 * gap_b) / 3))
-    row2_y, row2_h = Inches(3.05), Inches(1.05)
-    c1 = _diagram_node(slide, MARGIN, row2_y, row2_w, row2_h, "train_classifier.py", "RF vs Gradient Boosting ->\nmodel + EER threshold", border=TEAL)
-    c2 = _diagram_node(slide, MARGIN + 1 * (row2_w + gap_b), row2_y, row2_w, row2_h, "index_embeddings.py", "standardize ->\nk-NN embeddings", border=TEAL)
-    c3 = _diagram_node(slide, MARGIN + 2 * (row2_w + gap_b), row2_y, row2_w, row2_h, "kafka_producer.py ->\nstreaming_enrichment.py", "near-real-time scoring", border=TEAL)
-    for c in (c1, c2, c3):
-        _arrow(slide, b4.left + b4.width // 2, b4.top + b4.height, c.left + c.width // 2, c.top)
-
-    row3_w = Emu(int((SLIDE_W - 2 * MARGIN - gap_b) / 2))
-    row3_y, row3_h = Inches(4.75), Inches(0.85)
-    d1 = _diagram_node(slide, MARGIN, row3_y, row3_w, row3_h, "insights.py", "aggregations -> charts + RESULTS.md", border=RED)
-    d2 = _diagram_node(slide, MARGIN + row3_w + gap_b, row3_y, row3_w, row3_h, "Flask app", "/classify + /dashboard", border=RED)
-    for src, dst in [(c1, d1), (c1, d2), (c2, d2), (c3, d1), (c3, d2)]:
-        _arrow(slide, src.left + src.width // 2, src.top + src.height, dst.left + dst.width // 2, dst.top)
+    draw_architecture(slide, Inches(1.5), Inches(4.3))
 
     add_button(slide, "View exact diagram in DESIGN.md",
                "https://github.com/HadarBaum/asvspoof-voice-ai/blob/main/docs/DESIGN.md",
@@ -427,7 +489,8 @@ def main():
         "key from MinIO, never the local filesystem — any worker, anywhere, can read a clip.",
         "Protocol metadata (speaker id, attack id, bonafide/spoof label) stays in small local text files "
         "— only the audio bytes, the actually \"big\" unstructured data, go into the object store.",
-    ], size=17)
+    ], size=17, height=STRIP_BULLET_H)
+    add_stage_strip(slide, "minio")
 
     # --- 3d. Pipeline stage - transform (Spark) ------------------------------
     slide = add_header(prs, "Pipeline stage 2 - Transform", "Spark batch feature extraction — the actual \"big data\" step", slide_num=next_num())
@@ -442,7 +505,8 @@ def main():
         "model training itself.",
         "Driver and executors are both pinned to sys.executable so Spark workers resolve the same "
         "Python/venv as the driver, instead of whatever `python` happens to be on PATH.",
-    ], size=17)
+    ], size=17, height=STRIP_BULLET_H)
+    add_stage_strip(slide, "spark")
 
     # --- 3d(ii). Pipeline stage 2 - what's in the feature vector -------------
     slide = add_header(prs, "What's in the feature vector", "53 numbers per clip — one shared function, one fixed shape", slide_num=next_num())
@@ -481,7 +545,8 @@ def main():
         "Elasticsearch (a NoSQL document store) goes on to hold training results, live streamed "
         "predictions, and — once standardized — dense_vector embeddings for k-NN search, all in the "
         "same cluster.",
-    ], size=17)
+    ], size=17, height=STRIP_BULLET_H)
+    add_stage_strip(slide, "features")
 
     # --- 4. AI capability: classification + threshold fix -----------------
     slide = add_header(prs, "AI capability 1 — classification", "Random Forest vs. Gradient Boosting, picked by EER", slide_num=next_num())
@@ -507,9 +572,10 @@ def main():
         add_bullets(slide, [
             "Selection metric is EER — the metric the ASVspoof challenge itself is scored on, not raw accuracy, "
             "which looked strong while quietly failing bonafide clips (see the next two slides).",
-        ], top=Inches(4.0), size=16)
+        ], top=Inches(4.0), size=16, height=Inches(1.0))
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
+    add_stage_strip(slide, "train")
 
     # --- 5. How EER is calculated --------------------------------------------
     slide = add_header(prs, "How EER is calculated", "The metric the ASVspoof challenge itself is scored on", slide_num=next_num())
@@ -560,9 +626,27 @@ def main():
             "toward the majority class: it caught spoof reliably, bonafide much less so.",
             "Fix: the model artifact now stores its own EER-optimal decision threshold, used everywhere "
             "(streaming consumer, web app) instead of scikit-learn's default 0.5.",
-            "This same fix is re-confirmed further on, on live Kafka-streamed eval data — not only on the "
-            "dev set the threshold was chosen from. See the streamed-eval results later in the deck.",
-        ], top=Inches(3.55), size=16)
+        ], top=Inches(3.45), size=15, height=Inches(1.15))
+        # The trade-off table, not just the wins. Three of these five rows get WORSE at
+        # the EER threshold - showing only the bonafide-recall gain would be picking the
+        # flattering half of our own argument, and balanced accuracy is the row that
+        # actually justifies the choice (and matches what the eval slides now lead with).
+        gb = comparison["candidates"][comparison["selected"]]
+        d05, eer_pt = gb["at_default_threshold_0.5"], gb["at_eer_threshold"]
+        add_table(
+            slide,
+            ["Gradient Boosting on dev", "@ default 0.5", f"@ EER {eer_pt['threshold']:.3f}"],
+            [
+                ["Bonafide recall — real speech kept", f"{d05['recall_bonafide']:.1%}", f"{eer_pt['recall_bonafide']:.1%}"],
+                ["Bonafide precision — cost of the fix", f"{d05['precision_bonafide']:.1%}", f"{eer_pt['precision_bonafide']:.1%}"],
+                ["Spoof recall — attacks still caught", f"{d05['recall_spoof']:.1%}", f"{eer_pt['recall_spoof']:.1%}"],
+                ["Overall accuracy", f"{d05['accuracy']:.1%}", f"{eer_pt['accuracy']:.1%}"],
+                ["Balanced accuracy — the honest headline", f"{d05['balanced_accuracy']:.1%}", f"{eer_pt['balanced_accuracy']:.1%}"],
+            ],
+            top=Inches(4.75),
+            col_widths=[5.4, 3.2, 3.3],
+            highlight_rows={4},
+        )
     else:
         add_bullets(slide, ["Run the pipeline and re-generate slides for real numbers."])
 
@@ -584,7 +668,8 @@ def main():
         "(a mapping update, not a reindex — the 50k+ documents were already there).",
         "Powers /classify's \"most acoustically similar training clips\" — k-NN search, playable in "
         "the browser, replacing a keyword match with genuine semantic search.",
-    ])
+    ], height=STRIP_BULLET_H)
+    add_stage_strip(slide, "embed")
 
     # --- 9. AI capability: streaming enrichment -----------------------------
     slide = add_header(prs, "AI capability 3 — streaming enrichment", "Kafka producer/consumer, near-real-time scoring", slide_num=next_num())
@@ -597,7 +682,8 @@ def main():
         "A named consumer group tracks offset, so re-running resumes instead of re-scoring.",
         "Everything on the next three slides is scored here, on the eval partition — attacks A07–A19, "
         "synthesis systems the model never saw during training.",
-    ])
+    ], height=STRIP_BULLET_H)
+    add_stage_strip(slide, "stream")
 
     # --- 10. Pipeline stage - insights --------------------------------------
     slide = add_header(prs, "Pipeline stage 5 - Insights", "insights.py — Elasticsearch aggregations -> charts + RESULTS.md", slide_num=next_num())
@@ -611,7 +697,8 @@ def main():
         "The confusion matrix, confidence histogram, and accuracy-by-attack charts on the next slides "
         "are this script's direct output, not hand-drawn. The ROC and feature-importance charts shown "
         "earlier come from train_classifier.py instead, since those need the model's own dev predictions.",
-    ], size=17)
+    ], size=17, height=STRIP_BULLET_H)
+    add_stage_strip(slide, "insights")
 
     # --- 11. Results on streamed eval: confusion matrix + calibration -------
     slide = add_header(prs, "Results on streamed eval — confusion matrix & confidence", slide_num=next_num())
@@ -651,12 +738,14 @@ def main():
         "one playable right in the results, so you can hear what \"similar\" sounds like.",
         "/dashboard — live Elasticsearch aggregations: model comparison, threshold trade-off, ROC "
         "curve, confusion matrix, feature importance, confidence calibration.",
-    ], size=18)
-    add_button(slide, "▶  Open /classify", "http://localhost:5000/classify", MARGIN, Inches(5.75))
-    add_button(slide, "▶  Open /dashboard", "http://localhost:5000/dashboard", MARGIN + Inches(3.9), Inches(5.75), color=BLUE)
-    _textbox(slide, MARGIN, Inches(6.55), SLIDE_W - 2 * MARGIN, Inches(0.4),
+    ], size=18, height=Inches(2.5))
+    # Buttons and caption moved up from 5.75/6.55 to clear the architecture strip.
+    add_button(slide, "▶  Open /classify", "http://localhost:5000/classify", MARGIN, Inches(4.15))
+    add_button(slide, "▶  Open /dashboard", "http://localhost:5000/dashboard", MARGIN + Inches(3.9), Inches(4.15), color=BLUE)
+    _textbox(slide, MARGIN, Inches(4.82), SLIDE_W - 2 * MARGIN, Inches(0.3),
              "Links open localhost:5000 — click while presenting from the machine running the app (see README.md).",
              size=11, color=MUTED)
+    add_stage_strip(slide, "flask")
 
     # --- 13. Challenges & trade-offs ------------------------------------------
     slide = add_header(prs, "Challenges & trade-offs", slide_num=next_num())
