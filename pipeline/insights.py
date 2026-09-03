@@ -128,10 +128,20 @@ def main():
     incorrect_conf = [h["_source"]["confidence"] for h in conf_hits if not h["_source"]["correct"]]
 
     plt.figure(figsize=(6, 4))
-    bins = np.linspace(0.5, 1.0, 21)  # confidence is always >= 0.5 by construction (see common/model.py)
+    # The lower bound used to be hardcoded to 0.5, with a comment claiming confidence
+    # is always >= 0.5 "by construction". That was true only while the cutoff was
+    # scikit-learn's 0.5: common/model.py reports confidence as the winning class's
+    # probability, so a bonafide call is 1 - P(spoof), which for P(spoof) just under
+    # the deployed EER threshold of 0.689 goes as low as 0.311. Every prediction below
+    # 0.5 therefore fell outside the bins and was silently dropped from this chart -
+    # 91 of the 2,000 streamed predictions, at the time this was found. Deriving the
+    # floor from the data keeps the chart honest at whatever threshold is deployed.
+    all_conf = correct_conf + incorrect_conf
+    lo = min(0.5, np.floor(min(all_conf) * 20) / 20) if all_conf else 0.5
+    bins = np.linspace(lo, 1.0, 21)
     plt.hist(correct_conf, bins=bins, alpha=0.7, label=f"Correct (n={len(correct_conf)})", color="#55A868")
     plt.hist(incorrect_conf, bins=bins, alpha=0.7, label=f"Incorrect (n={len(incorrect_conf)})", color="#C44E52")
-    plt.xlabel("Model confidence")
+    plt.xlabel("Model confidence (winning class's probability)")
     plt.ylabel("Utterances")
     plt.title("Confidence distribution: correct vs. incorrect predictions")
     plt.legend()

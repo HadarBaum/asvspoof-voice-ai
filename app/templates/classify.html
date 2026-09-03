@@ -111,7 +111,22 @@
   }
 
   async function startRecording() {
-    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    // Browsers enable echo cancellation, noise suppression and automatic gain
+    // control by default. All three are DSP that alters the spectrum, and they
+    // work directly against this model: its top features are the frame-to-frame
+    // *variability* of the spectral envelope (mfcc_3_std alone carries ~18% of
+    // the importance), AGC flattens amplitude variation and noise suppression
+    // smooths spectral variation. Measured on 40 real bonafide clips, an AGC +
+    // suppression proxy pushed median P(spoof) from 0.12 to 0.53 and the
+    // spoof-call rate from 7.5% to 27.5% - i.e. the browser's own cleanup makes
+    // real human speech look synthetic. Ask for the raw microphone instead.
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+      },
+    });
     audioContext = new (window.AudioContext || window.webkitAudioContext)();
     sourceNode = audioContext.createMediaStreamSource(mediaStream);
     // ScriptProcessorNode is deprecated in favor of AudioWorklet, but needs no

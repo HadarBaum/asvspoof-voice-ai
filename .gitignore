@@ -24,6 +24,9 @@ app/static/charts/*.png
 # Kaggle credentials must never be committed
 kaggle.json
 
+# Office lock files - PowerPoint writes ~$slides.pptx next to an open deck
+~$*
+
 # OS
 .DS_Store
 Thumbs.db
