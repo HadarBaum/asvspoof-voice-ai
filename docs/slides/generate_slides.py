@@ -352,15 +352,22 @@ def add_stat_cards(slide, stats, top=Inches(1.55), card_h=Inches(1.7)):
             lp.alignment = PP_ALIGN.CENTER
 
 
-def add_table(slide, headers, rows, top=Inches(1.7), col_widths=None, highlight_rows=None):
+def add_table(slide, headers, rows, top=Inches(1.7), col_widths=None, highlight_rows=None,
+              row_h=Inches(0.55), size=15):
     """A real PowerPoint table - manually space-padding text in a proportional
     font (Calibri) doesn't actually line up into columns, so tabular data
-    (like the model comparison) needs an actual table shape, not bullets."""
+    (like the model comparison) needs an actual table shape, not bullets.
+
+    row_h and size are adjustable because the table height is n_rows * row_h and
+    nothing here clamps it to the slide: a 6-row table at the default 0.55 is 3.3in
+    tall, which runs off the bottom if it starts much below mid-slide. Callers
+    placing a tall table low down must budget for it (PowerPoint also treats row
+    height as a minimum and will grow rows whose text wraps, so leave headroom)."""
     highlight_rows = highlight_rows or set()
     n_cols = len(headers)
     n_rows = len(rows) + 1
     width = SLIDE_W - 2 * MARGIN
-    height = Inches(0.55) * n_rows
+    height = row_h * n_rows
     gfx = slide.shapes.add_table(n_rows, n_cols, MARGIN, top, width, height)
     table = gfx.table
 
@@ -369,13 +376,13 @@ def add_table(slide, headers, rows, top=Inches(1.7), col_widths=None, highlight_
         for i, w in enumerate(col_widths):
             table.columns[i].width = Emu(int(width * w / total))
 
-    def _style_cell(cell, text, bold=False, color=DARK_TEXT, bg=None, size=15):
+    def _style_cell(cell, text, bold=False, color=DARK_TEXT, bg=None, cell_size=None):
         cell.text = str(text)
         cell.vertical_anchor = MSO_ANCHOR.MIDDLE
         cell.margin_left = Inches(0.12)
         cell.margin_right = Inches(0.12)
         p = cell.text_frame.paragraphs[0]
-        p.font.size = Pt(size)
+        p.font.size = Pt(cell_size if cell_size is not None else size)
         p.font.bold = bold
         p.font.color.rgb = color
         p.font.name = FONT
@@ -387,7 +394,7 @@ def add_table(slide, headers, rows, top=Inches(1.7), col_widths=None, highlight_
             cell.fill.fore_color.rgb = CARD_BG
 
     for j, header in enumerate(headers):
-        _style_cell(table.cell(0, j), header, bold=True, color=WHITE, bg=NAVY, size=14)
+        _style_cell(table.cell(0, j), header, bold=True, color=WHITE, bg=NAVY, cell_size=size - 1)
 
     for i, row in enumerate(rows, start=1):
         is_highlight = (i - 1) in highlight_rows
@@ -489,7 +496,7 @@ def main():
         "key from MinIO, never the local filesystem — any worker, anywhere, can read a clip.",
         "Protocol metadata (speaker id, attack id, bonafide/spoof label) stays in small local text files "
         "— only the audio bytes, the actually \"big\" unstructured data, go into the object store.",
-    ], size=17, height=STRIP_BULLET_H)
+    ], size=15, height=STRIP_BULLET_H)
     add_stage_strip(slide, "minio")
 
     # --- 3d. Pipeline stage - transform (Spark) ------------------------------
@@ -532,7 +539,7 @@ def main():
         "the Kafka consumer, and the live /classify endpoint — training and inference match exactly.",
         "Pitch uses plain librosa.yin, not pyin — pyin's HMM smoothing measured 2-9s/clip; across 50k+ "
         "clips, yin gets a comparable signal in ~0.02s.",
-    ], top=Inches(5.75), size=13)
+    ], top=Inches(5.72), size=12)
 
     # --- 3e. Pipeline stage - load --------------------------------------------
     slide = add_header(prs, "Pipeline stage 2 - Load", "Feature table -> Parquet + Elasticsearch", slide_num=next_num())
@@ -621,31 +628,40 @@ def main():
             (f"{metrics['recall_bonafide_dev']:.0%}", "Bonafide recall\nat deployed EER threshold", TEAL),
             (f"{metrics['eer_dev']:.1%}", "Equal Error Rate\n(ASVspoof's own metric)", BLUE),
         ])
+        # Two single-line bullets on purpose. add_bullets does not clip - PowerPoint
+        # spills text past the box - so the longer wording that used to be here wrapped
+        # to four lines and ran under the table below.
         add_bullets(slide, [
-            "Dev accuracy at the default threshold (94.3%) looked strong, but the model was quietly biased "
-            "toward the majority class: it caught spoof reliably, bonafide much less so.",
-            "Fix: the model artifact now stores its own EER-optimal decision threshold, used everywhere "
-            "(streaming consumer, web app) instead of scikit-learn's default 0.5.",
-        ], top=Inches(3.45), size=15, height=Inches(1.15))
+            "Dev accuracy at 0.5 looked strong (94.3%), but the model was quietly biased to the majority class.",
+            "Fix: the artifact stores its own EER-optimal threshold, used everywhere instead of the default 0.5.",
+        ], top=Inches(3.38), size=14, height=Inches(0.8))
         # The trade-off table, not just the wins. Three of these five rows get WORSE at
         # the EER threshold - showing only the bonafide-recall gain would be picking the
         # flattering half of our own argument, and balanced accuracy is the row that
         # actually justifies the choice (and matches what the eval slides now lead with).
         gb = comparison["candidates"][comparison["selected"]]
         d05, eer_pt = gb["at_default_threshold_0.5"], gb["at_eer_threshold"]
+        # Geometry, because a 6-row table does not fit here at the default row height:
+        # stat cards 1.55-3.25 (card_h left at its default: add_stat_cards places the
+        # label box at top+1.05 with a fixed height, so a shorter card spills its label
+        # onto the slide background), bullets 3.38 + ~2 lines of 14pt = ~4.2, table
+        # 4.65 + 6 * 0.46 = 7.41, and the
+        # slide is 7.5 tall. Keep that sum under ~7.3 if any of these move.
         add_table(
             slide,
             ["Gradient Boosting on dev", "@ default 0.5", f"@ EER {eer_pt['threshold']:.3f}"],
             [
-                ["Bonafide recall — real speech kept", f"{d05['recall_bonafide']:.1%}", f"{eer_pt['recall_bonafide']:.1%}"],
-                ["Bonafide precision — cost of the fix", f"{d05['precision_bonafide']:.1%}", f"{eer_pt['precision_bonafide']:.1%}"],
-                ["Spoof recall — attacks still caught", f"{d05['recall_spoof']:.1%}", f"{eer_pt['recall_spoof']:.1%}"],
+                ["Bonafide recall (real speech kept)", f"{d05['recall_bonafide']:.1%}", f"{eer_pt['recall_bonafide']:.1%}"],
+                ["Bonafide precision (the cost)", f"{d05['precision_bonafide']:.1%}", f"{eer_pt['precision_bonafide']:.1%}"],
+                ["Spoof recall (attacks caught)", f"{d05['recall_spoof']:.1%}", f"{eer_pt['recall_spoof']:.1%}"],
                 ["Overall accuracy", f"{d05['accuracy']:.1%}", f"{eer_pt['accuracy']:.1%}"],
-                ["Balanced accuracy — the honest headline", f"{d05['balanced_accuracy']:.1%}", f"{eer_pt['balanced_accuracy']:.1%}"],
+                ["Balanced accuracy (the honest headline)", f"{d05['balanced_accuracy']:.1%}", f"{eer_pt['balanced_accuracy']:.1%}"],
             ],
-            top=Inches(4.75),
-            col_widths=[5.4, 3.2, 3.3],
+            top=Inches(4.65),
+            col_widths=[5.6, 3.1, 3.2],
             highlight_rows={4},
+            row_h=Inches(0.46),
+            size=13,
         )
     else:
         add_bullets(slide, ["Run the pipeline and re-generate slides for real numbers."])
@@ -706,7 +722,7 @@ def main():
         os.path.join(CHARTS_DIR, "confusion_matrix.png"),
         os.path.join(CHARTS_DIR, "confidence_histogram.png"),
     ], caption="Both from the streamed eval predictions. Left: true vs. predicted counts. "
-               "Right: confidence on correct vs. incorrect calls — some are confidently wrong.")
+               "Right: confidence on correct vs. incorrect calls.")
 
     # --- 12. Results on streamed eval: headline accuracy + by attack type ---
     slide = add_header(prs, "Results on streamed eval — accuracy by attack type", "Near-perfect on most TTS/VC systems; A17/A18/A19 are the hard ones", slide_num=next_num())
