@@ -36,7 +36,15 @@
     <div class="confidence-bar">
       <div class="confidence-bar-fill" style="width: {{ result.confidence }}%"></div>
     </div>
+    <p class="result-meta">Clip length: {{ result.duration }}s</p>
   </div>
+
+  {% if result.duration_warning %}
+  <div class="duration-warning">
+    <strong>Short clip — treat this verdict with caution.</strong>
+    {{ result.duration_warning }}
+  </div>
+  {% endif %}
 
   {% if result.similar %}
   <div class="card" style="margin-top: 1.5rem;">

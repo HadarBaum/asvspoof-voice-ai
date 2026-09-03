@@ -35,6 +35,11 @@ SCALER_PATH = os.environ.get(
 METRICS_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "training_metrics.json")
 COMPARISON_PATH = os.path.join(os.path.dirname(__file__), "..", "docs", "model_comparison.json")
 
+# Shortest clip /classify will report a verdict on without flagging it. The training
+# set's shortest bonafide clip is 1.28s and its median is 3.32s, so 2s is already
+# near the edge of what the model has ever seen.
+MIN_RELIABLE_DURATION = 2.0
+
 app = Flask(__name__)
 _model = None
 _scaler = None
@@ -100,7 +105,24 @@ def classify():
                 result = {
                     "label": "AI-generated" if label == "spoof" else "Human",
                     "confidence": round(confidence * 100, 1),
+                    "duration": round(feats["duration_seconds"], 1),
                 }
+                # Every one of the 53 features is a mean or std across frames, so a
+                # short clip computes those statistics over too few frames to be
+                # stable - and the training set has nothing below 1.28s (median
+                # 3.32s), so short audio is genuinely out of distribution rather
+                # than merely harder. Measured on real bonafide eval clips
+                # truncated to length: 0.8s is called spoof 47.5% of the time,
+                # 2.5s only 7.5%. Say so rather than returning a verdict the model
+                # has no basis for.
+                if feats["duration_seconds"] < MIN_RELIABLE_DURATION:
+                    result["duration_warning"] = (
+                        f"This clip is {feats['duration_seconds']:.1f}s. The model was trained on "
+                        f"speech of {MIN_RELIABLE_DURATION:.0f}s and longer (median 3.3s), and every "
+                        "feature it uses is averaged across frames — so on very short audio it is "
+                        "unreliable in the direction of calling real speech AI-generated. For a "
+                        "trustworthy result, record 3–5 seconds of continuous speech."
+                    )
                 try:
                     result["similar"] = find_similar_clips(vector)
                 except Exception as exc:  # noqa: BLE001 - similarity search is a bonus, never block the main result

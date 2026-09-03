@@ -657,6 +657,62 @@ a solved one.
 
 ---
 
+## If the live demo calls a real person "AI-generated"
+
+This is the most likely way the demo embarrasses you, so it is worth being able to
+answer with measurements rather than improvisation. **In-domain the model is fine:**
+120 held-out bonafide eval clips score **92.5% bonafide**, median P(spoof) 0.117
+against a 0.689 threshold. What breaks it is audio unlike its training data — and
+we measured each factor separately on real bonafide clips.
+
+**Clip length is the biggest single factor.** Every one of the 53 features is a
+mean or standard deviation *across frames*, so a short clip computes those
+statistics over too few frames to be stable. The training set contains nothing
+shorter than **1.28s** (median 3.32s):
+
+| clip length | median P(spoof) | called spoof |
+|---|---|---|
+| 0.5s | 0.675 | 45.0% |
+| 0.8s | 0.687 | 47.5% |
+| 1.5s | 0.461 | 20.0% |
+| 2.5s | 0.164 | 7.5% |
+| 4.0s | 0.140 | 5.0% |
+
+**Overlapping speakers are fatal** — and there is no single F0 to measure, so the
+pitch features stop meaning anything:
+
+| voices | median P(spoof) | called spoof |
+|---|---|---|
+| 1 | 0.141 | 5.1% |
+| 2 | 0.432 | 26.3% |
+| 4 | 0.670 | 44.4% |
+| 8 | 0.896 | **100.0%** |
+
+**Recording conditions matter too**, measured on studio-clean clips: adding mic
+noise at 20 dB SNR moves median P(spoof) 0.118 → 0.648; an AGC proxy → 0.395; a
+noise-suppression proxy → 0.366. Browsers enable echo cancellation, noise
+suppression and AGC by default, and all three attack the *variability* features the
+model leans on (`mfcc_3_std` alone is ~18% of the importance). `/classify` now
+requests the raw microphone with those disabled, and flags any clip under 2s.
+
+**The honest framing:** the model generalizes across *synthesis systems* — that is
+exactly what eval A07–A19 measures, and it holds — but not across *clip length or
+recording conditions*, because nothing in ASVspoof2019 asks it to. Fixing that
+would mean augmenting training with noise, reverb and short crops, which is a
+known and unglamorous remedy we did not have the compute budget for.
+
+**Demo advice.** Do not record the class saying one word together: that is the
+0.8s row and the 8-voice row at once, and it will confidently say AI-generated.
+Use held-out eval clips as the primary demo (legitimate — A07–A19 were never
+trained on), and if you want a live human clip, one speaker reading a full sentence
+for 3–5 seconds, close to the mic, tested beforehand with the working file kept as
+a fallback. The strongest version is to show both deliberately: one word gets
+called AI, a full sentence gets called human, same voice and mic — then explain
+why. Demonstrating that you know where your system's boundary is beats hoping it
+behaves.
+
+---
+
 ## Two inconsistencies found — both now resolved
 
 Recorded here so you know what changed and why, in case anyone remembers the

@@ -224,3 +224,23 @@ section { margin-bottom: 2.5rem; }
 }
 .similar-list .tag.human { background: var(--human-bg); color: var(--human); }
 .similar-list .tag.spoof { background: var(--spoof-bg); color: var(--spoof); }
+
+/* Clip-length caveat on /classify. Amber rather than red: the verdict still
+   rendered, it just is not trustworthy on audio this short (see
+   MIN_RELIABLE_DURATION in app/server.py for the measured reasoning). */
+.result-meta {
+  margin: 0.6rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+.duration-warning {
+  margin-top: 1rem;
+  padding: 0.85rem 1.1rem;
+  border-radius: 8px;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  color: #78350f;
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.duration-warning strong { display: block; margin-bottom: 0.3rem; }
