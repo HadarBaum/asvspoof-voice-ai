@@ -130,14 +130,14 @@ def main():
     X_train, y_train = train_df[FEATURE_NAMES], train_df["y"]
     X_dev, y_dev = dev_df[FEATURE_NAMES], dev_df["y"]
 
-    # class_weight="balanced" is a first-class RandomForestClassifier option, but
-    # GradientBoostingClassifier has no such parameter - the portable way to
-    # reweight both is via per-sample weights computed the same way underneath.
+    # RandomForestClassifier has a class_weight option, but
+    # GradientBoostingClassifier does not. To treat both models consistently,
+    # we reweight both using the same per-sample weights.
     sample_weight_train = compute_sample_weight("balanced", y_train)
 
     candidates = {
         "random_forest": RandomForestClassifier(
-            n_estimators=200, max_depth=None, class_weight="balanced", random_state=42, n_jobs=-1
+            n_estimators=200, max_depth=None, random_state=42, n_jobs=-1
         ),
         "gradient_boosting": GradientBoostingClassifier(
             n_estimators=150, max_depth=3, learning_rate=0.1, random_state=42
