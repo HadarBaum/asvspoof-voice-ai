@@ -771,6 +771,8 @@ def main():
         "Windows + Spark: worker Python resolution, a path with spaces, a pyspark 3.5.1 / Python 3.12 "
         "incompatibility, and a removed distutils — four environment bugs, none in our own logic, all "
         "diagnosed and fixed rather than worked around.",
+        "A bug in our own code: Random Forest was reweighted twice — class_weight and sample_weight "
+        "multiply in sklearn, turning 8.8:1 into 78:1.",
         "The EER threshold trades some spoof recall for bonafide recall — a deliberate choice, not a "
         "free win: no single threshold maximizes both on an imbalanced dataset.",
         "Embedding is the classifier's own feature vector, not a separate pretrained audio embedding "
