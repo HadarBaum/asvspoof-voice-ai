@@ -217,8 +217,35 @@ team to read `sklearn`'s source for and fully explain in Q&A - a CNN over raw
 spectrograms would likely score higher but be a much harder thing to defend as
 "fully understood." Between the two, a real comparison (see
 `docs/model_comparison.json` for the full numbers) is more defensible than an
-unchallenged single number: on the full-scale run, Gradient Boosting won with
-EER 9.26% vs. Random Forest's 12.31% (ROC-AUC 0.970 vs. 0.951).
+unchallenged single number.
+
+**How the deployed model is actually chosen, and why it is not just min(EER):**
+Random Forest was originally receiving `class_weight="balanced"` *and* a balanced
+`sample_weight`. Those **multiply** in sklearn, so an 8.84:1 correction became
+78:1 — over-correcting nine times past balance, which caused minority-class
+overfitting and cost real discriminative power (EER 12.31%, ROC-AUC 0.9506; worse
+than applying no weighting at all). With the duplicate removed, Random Forest
+scores **EER 9.09% / ROC-AUC 0.9689** against Gradient Boosting's **9.26% /
+0.9695** — a statistical tie on dev. The EER gap is about 3 clips out of 2,548
+bonafide, well inside its confidence interval, so `min(EER)` would effectively be
+a coin toss. The deployed model is therefore **pinned to Gradient Boosting**
+(`DEPLOY_MODEL` overrides it, `"auto"` restores lowest-EER), on three grounds
+that are not ties:
+
+1. **Generalization to unseen attacks.** Dev contains only the *training* attacks
+   A01–A06, so it cannot speak to the actual task. On a 625-clip sample of the
+   eval partition (A07–A19, synthesis systems absent from training), Gradient
+   Boosting reaches ROC-AUC **0.9270** against Random Forest's **0.9178** — a
+   paired-bootstrap difference of **+0.0093, 95% CI [+0.0007, +0.0181]**, the one
+   comparison in this project that excludes zero. That is consistent with model
+   capacity: Random Forest grows to purity at a mean depth of 45 across 379k
+   nodes and can memorize the six training attacks, while Gradient Boosting's
+   depth-3 trees are forced into coarser structure that transfers.
+2. **Calibration.** At the default 0.5 threshold Gradient Boosting recovers 80.2%
+   of bonafide against Random Forest's 26.6% (see the paradox section below), so
+   its operating point is not perched at 0.895.
+3. **Deployment cost.** 283KB vs. 29.7MB on disk, 0.55ms vs. 27.6ms per clip —
+   which matters for the streaming consumer and the live demo.
 
 **Why the dataset's own train/dev split, not a random one:** a random split could
 put the same speaker's utterances, or utterances from the same attack system, on
@@ -248,23 +275,33 @@ doesn't change the *default 0.5 threshold* `.predict()` applies at evaluation
 time - the two are different levers, and fixing only one isn't enough.
 
 This is exactly why the training script also reports **ROC-AUC** and **EER**
-(`compute_eer()` in this file) - both threshold-independent, and EER
-specifically is the metric the official ASVspoof challenge itself is scored on.
+(`compute_eer()` in this file), both threshold-independent. Note EER was an
+official *secondary* countermeasure metric in ASVspoof2019 — **min t-DCF was the
+primary challenge metric**. We select on EER because it needs no cost model and
+directly balances the two error types, not because it was the headline metric.
 
 **Two separate fixes went in, and it matters which number you attribute to
 which one** - this tripped us up once already (a discrepancy between a "27%"
 figure quoted here and an "80%" figure on the dashboard/slides, from before
-this section was corrected):
+this section was corrected). The Random Forest column below is the **bug-fixed**
+model, which matters: it is no longer a handicapped candidate but a genuine tie
+on EER, and it *still* recovers only a quarter of real speech at the default
+threshold. The calibration gap is intrinsic to the model family, not an artifact
+of the reweighting bug.
 
-| | Random Forest | Gradient Boosting (deployed) |
+| | Random Forest (bug-fixed) | Gradient Boosting (deployed) |
 |---|---|---|
-| Bonafide recall @ default 0.5 threshold | 28.0% | 80.2% |
-| Bonafide recall @ that model's own EER threshold | 88.1% | 90.7% |
+| Dev EER | 9.09% | 9.26% |
+| Bonafide recall @ default 0.5 threshold | 26.6% | 80.2% |
+| Spoof recall @ default 0.5 threshold | 99.8% | 95.9% |
+| Bonafide recall @ that model's own EER threshold | 90.9% (thr 0.895) | 90.7% (thr 0.689) |
 
 1. **Switching models helped on its own.** Gradient Boosting's raw probability
-   outputs are far less skewed than Random Forest's turned out to be - even at
-   the naive default threshold, it recovers 80% of bonafide recall vs. Random
-   Forest's 28%, with no threshold change involved at all.
+   outputs are far less skewed than Random Forest's - even at the naive default
+   threshold, it recovers 80.2% of bonafide recall vs. Random Forest's 26.6%,
+   with no threshold change involved at all. Random Forest's probabilities are so
+   crushed against 1.0 that nearly everything clears 0.5, which is why it catches
+   99.8% of spoofs while finding a quarter of humans.
 2. **Switching the threshold helped further, for whichever model you deploy.**
    `compute_eer()` returns not just the error rate but the **score threshold**
    at that operating point, and the model artifact now stores and uses it
@@ -277,11 +314,20 @@ bonafide (human)       0.53      0.91      0.67      2548
       spoof (AI)       0.99      0.91      0.95     22296
 ```
 
-So: **"28% → 91%" is a fair headline for "the original naive approach vs. the
+**A caveat worth volunteering before anyone asks it:** the threshold fix works on
+*either* model — bug-fixed Random Forest reaches 90.9% bonafide recall at its own
+EER threshold of 0.895, essentially the same place Gradient Boosting lands. So the
+model switch was not *needed* to reach 91%. The two changes are independent, and
+the model choice rests on the three grounds listed earlier (generalization to
+unseen attacks, calibration, deployment cost) rather than on final bonafide
+recall. Claiming the model switch caused the 91% would be the same conflation this
+section exists to prevent.
+
+So: **"27% → 91%" is a fair headline for "the original naive approach vs. the
 final deployed one,"** but it's the combined effect of two changes, not one
-threshold move on a single fixed model - the 28% is Random Forest at 0.5, the
+threshold move on a single fixed model - the 26.6% is Random Forest at 0.5, the
 91% is Gradient Boosting at its EER threshold. Every number the dashboard and
-slides show is Gradient Boosting-only (its 0.5-threshold row is 80%, not 28%),
+slides show is Gradient Boosting-only (its 0.5-threshold row is 80%, not 27%),
 since that's the model actually deployed; this document is the one place that
 also keeps the original Random Forest number around, for the historical "how
 was the problem first found" narrative. Precision on bonafide dropped either

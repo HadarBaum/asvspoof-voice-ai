@@ -577,15 +577,16 @@ def main():
             highlight_rows=highlight,
         )
         add_bullets(slide, [
-            "Selection metric is EER — the metric the ASVspoof challenge itself is scored on, not raw accuracy, "
-            "which looked strong while quietly failing bonafide clips (see the next two slides).",
-        ], top=Inches(4.0), size=16, height=Inches(1.0))
+            "A statistical tie on EER — the gap is ~3 clips in 2,548. Gradient Boosting is deployed "
+            "for calibration and cost: 80.2% bonafide recall at the default threshold vs. 26.6%, "
+            "283KB vs. 29.7MB on disk, 0.55ms vs. 27.6ms per clip.",
+        ], top=Inches(4.0), size=13, height=Inches(0.95))
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
     add_stage_strip(slide, "train")
 
     # --- 5. How EER is calculated --------------------------------------------
-    slide = add_header(prs, "How EER is calculated", "The metric the ASVspoof challenge itself is scored on", slide_num=next_num())
+    slide = add_header(prs, "How EER is calculated", "A secondary ASVspoof2019 metric - min t-DCF was the primary one", slide_num=next_num())
     add_bullets(slide, [
         "Score every dev utterance with the model, giving each one a P(spoof) between 0 and 1.",
         "Sweep every possible decision threshold and, at each one, compute two error rates: the "
@@ -595,8 +596,9 @@ def main():
         "Rate is the threshold where the two curves cross, i.e. where both error rates are equal.",
         "EER itself is that shared error rate at the crossing point; the threshold at that point is "
         "what actually gets deployed (see the model artifact in common/model.py).",
-        "Lower EER = better separation between the two classes. 0% would mean a threshold exists "
-        "with zero errors of either kind; this project's deployed model scores 9.26%.",
+        "Lower EER = better separation. 0% would mean a threshold exists with zero errors of "
+        "either kind; this project's deployed model scores 9.26%. EER was a secondary ASVspoof2019 "
+        "metric (min t-DCF was primary) - we use it because it needs no cost model.",
     ], size=17)
     _rounded_rect(slide, Inches(0.6), Inches(5.85), SLIDE_W - Inches(1.2), Inches(1.15), CARD_BG, border_color=BORDER)
     code_box = slide.shapes.add_textbox(Inches(0.85), Inches(5.98), SLIDE_W - Inches(1.7), Inches(0.95))
