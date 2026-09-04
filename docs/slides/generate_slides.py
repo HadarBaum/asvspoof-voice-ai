@@ -555,32 +555,28 @@ def main():
     ], size=17, height=STRIP_BULLET_H)
     add_stage_strip(slide, "features")
 
-    # --- 4. AI capability: classification + threshold fix -----------------
-    slide = add_header(prs, "AI capability 1 — classification", "Random Forest vs. Gradient Boosting, picked by EER", slide_num=next_num())
-    add_bullets(slide, [
-        "Both models reweighted for the ~9:1 spoof/bonafide imbalance in training data, then compared on dev:",
-    ], top=Inches(1.5), size=16)
+    # --- 4. AI capability: where we started (the accuracy paradox) ----------
+    # These four slides are ordered as the work actually happened, not as a
+    # comparison table followed by a justification: start at the default threshold,
+    # watch accuracy lie, then fix the model, then fix the threshold. EER is
+    # explained between the failure and the fixes so it arrives already motivated -
+    # in the previous ordering the comparison table said "picked by EER" two slides
+    # before the audience learned why accuracy could not be trusted.
+    slide = add_header(prs, "The accuracy paradox — where we started",
+                       "AI capability 1: Random Forest at scikit-learn's default 0.5 threshold", slide_num=next_num())
     if comparison:
-        cands = comparison["candidates"]
-        selected = comparison["selected"]
-        names = list(cands.keys())
-        highlight = {i for i, name in enumerate(names) if name == selected}
-        add_table(
-            slide,
-            ["Model", "EER (lower is better)", "ROC-AUC", "Deployed"],
-            [
-                [name.replace("_", " ").title(), f"{cands[name]['eer']:.2%}", f"{cands[name]['roc_auc']:.3f}", "✓" if name == selected else ""]
-                for name in names
-            ],
-            top=Inches(2.15),
-            col_widths=[3, 2, 2, 1.4],
-            highlight_rows=highlight,
-        )
+        rf0 = comparison["candidates"]["random_forest"]["at_default_threshold_0.5"]
+        add_stat_cards(slide, [
+            (f"{rf0['accuracy']:.1%}", "Dev accuracy\nlooked like a finished project", BLUE),
+            (f"{rf0['recall_spoof']:.1%}", "Spoof recall\nnearly every attack caught", TEAL),
+            (f"{rf0['recall_bonafide']:.1%}", "Bonafide recall\nreal human speech found", RED),
+        ])
         add_bullets(slide, [
-            "A statistical tie on EER — the gap is ~3 clips in 2,548. Gradient Boosting is deployed "
-            "for calibration and cost: 80.2% bonafide recall at the default threshold vs. 26.6%, "
-            "283KB vs. 29.7MB on disk, 0.55ms vs. 27.6ms per clip.",
-        ], top=Inches(4.0), size=13, height=Inches(0.95))
+            "Dev is ~90% spoof, so a model that leans to the majority class scores well on accuracy "
+            "while failing the class we actually care about. Accuracy was hiding the failure, not measuring it.",
+            "Reweighting the training loss does not fix this: the 0.5 cutoff applied at evaluation "
+            "time is a separate lever.",
+        ], top=Inches(3.45), size=14, height=Inches(1.4))
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
     add_stage_strip(slide, "train")
@@ -616,39 +612,73 @@ def main():
         p.font.size = Pt(13)
         p.font.color.rgb = NAVY
 
-    # --- 6. Results on dev: the accuracy paradox, found and fixed -----------
+    # --- 6. Fix 1: switching the model ---------------------------------------
+    # The comparison table lives here rather than opening the sequence: by this point
+    # the audience knows why calibration matters, so a table showing Random Forest
+    # with the *better* EER and the deployed tick on Gradient Boosting reads as
+    # evidence instead of a contradiction needing an immediate footnote.
+    slide = add_header(prs, "Fix 1 — switching the model",
+                       "Same 0.5 threshold, better-calibrated probabilities", slide_num=next_num())
+    if comparison:
+        cands = comparison["candidates"]
+        selected = comparison["selected"]
+        rf0 = cands["random_forest"]["at_default_threshold_0.5"]
+        gb0 = cands[selected]["at_default_threshold_0.5"]
+        add_stat_cards(slide, [
+            (f"{rf0['recall_bonafide']:.1%}", "Random Forest\nbonafide recall @ 0.5", RED),
+            (f"{gb0['recall_bonafide']:.1%}", "Gradient Boosting\nbonafide recall @ 0.5", TEAL),
+            (f"+{100 * (gb0['recall_bonafide'] - rf0['recall_bonafide']):.0f} pts", "From the model choice alone\nno threshold change", BLUE),
+        ])
+        names = list(cands.keys())
+        add_table(
+            slide,
+            ["Model", "EER (lower is better)", "ROC-AUC", "Deployed"],
+            [
+                [name.replace("_", " ").title(), f"{cands[name]['eer']:.2%}", f"{cands[name]['roc_auc']:.3f}", "✓" if name == selected else ""]
+                for name in names
+            ],
+            top=Inches(3.5),
+            col_widths=[3, 2, 2, 1.4],
+            highlight_rows={i for i, name in enumerate(names) if name == selected},
+            row_h=Inches(0.5),
+        )
+        add_bullets(slide, [
+            "A statistical tie on EER — the gap is ~3 clips in 2,548 — so the deployed model is pinned, "
+            "not picked by lowest EER. Gradient Boosting is kept for calibration and deployment cost: "
+            "283KB vs. 29.7MB on disk, 0.55ms vs. 27.6ms per clip.",
+        ], top=Inches(5.25), size=13, height=Inches(1.0))
+    else:
+        add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
+
+    # --- 6b. Fix 2: switching the threshold ----------------------------------
     # Slide order note: results are split by which partition produced them. The dev
-    # results (this slide and the next) come from train_classifier.py and belong here,
-    # next to the EER slide they depend on. The streamed-eval results come from
+    # results (these slides and the next) come from train_classifier.py and belong
+    # here, next to the EER slide they depend on. The streamed-eval results come from
     # insights.py reading the predictions index, which only exists once the Kafka
     # consumer has run - so they sit after the streaming-enrichment slide instead of
     # before it. Nothing here should forward-reference a component not yet introduced.
-    slide = add_header(prs, "Results on dev — the accuracy paradox, found and fixed", slide_num=next_num())
-    if metrics:
+    slide = add_header(prs, "Fix 2 — switching the threshold",
+                       "0.5 to the EER-optimal 0.689, on the deployed model", slide_num=next_num())
+    if metrics and comparison:
         add_stat_cards(slide, [
-            (f"{metrics['recall_bonafide_dev_default_threshold_0.5']:.0%}", "Bonafide recall\nat default 0.5 threshold", RED),
-            (f"{metrics['recall_bonafide_dev']:.0%}", "Bonafide recall\nat deployed EER threshold", TEAL),
-            (f"{metrics['eer_dev']:.1%}", "Equal Error Rate\n(ASVspoof's own metric)", BLUE),
+            (f"{metrics['recall_bonafide_dev_default_threshold_0.5']:.0%}", "Bonafide recall\nat the default 0.5", RED),
+            (f"{metrics['recall_bonafide_dev']:.0%}", "Bonafide recall\nat the EER threshold", TEAL),
+            (f"{metrics['eer_dev']:.1%}", "Equal Error Rate\nwhere both errors are equal", BLUE),
         ])
-        # Two single-line bullets on purpose. add_bullets does not clip - PowerPoint
-        # spills text past the box - so the longer wording that used to be here wrapped
-        # to four lines and ran under the table below.
-        add_bullets(slide, [
-            "Dev accuracy at 0.5 looked strong (94.3%), but the model was quietly biased to the majority class.",
-            "Fix: the artifact stores its own EER-optimal threshold, used everywhere instead of the default 0.5.",
-        ], top=Inches(3.38), size=14, height=Inches(0.8))
         # The trade-off table, not just the wins. Three of these five rows get WORSE at
         # the EER threshold - showing only the bonafide-recall gain would be picking the
         # flattering half of our own argument, and balanced accuracy is the row that
         # actually justifies the choice (and matches what the eval slides now lead with).
         gb = comparison["candidates"][comparison["selected"]]
         d05, eer_pt = gb["at_default_threshold_0.5"], gb["at_eer_threshold"]
-        # Geometry, because a 6-row table does not fit here at the default row height:
-        # stat cards 1.55-3.25 (card_h left at its default: add_stat_cards places the
-        # label box at top+1.05 with a fixed height, so a shorter card spills its label
-        # onto the slide background), bullets 3.38 + ~2 lines of 14pt = ~4.2, table
-        # 4.65 + 6 * 0.46 = 7.41, and the
-        # slide is 7.5 tall. Keep that sum under ~7.3 if any of these move.
+        # Geometry: cards 1.55-3.25 (card_h left at its default - add_stat_cards places
+        # the label box at top+1.05 with a fixed height, so a shorter card spills its
+        # label onto the background), one bullet 3.38-3.75, table 3.95 + 6 * 0.46 = 6.71.
+        # Slide is 7.5 tall; keep the sum under ~7.3 if any of these move.
+        add_bullets(slide, [
+            "The threshold now lives inside the model artifact, so the streaming consumer and the "
+            "web app cannot drift back to 0.5.",
+        ], top=Inches(3.38), size=14, height=Inches(0.5))
         add_table(
             slide,
             ["Gradient Boosting on dev", "@ default 0.5", f"@ EER {eer_pt['threshold']:.3f}"],
@@ -659,7 +689,7 @@ def main():
                 ["Overall accuracy", f"{d05['accuracy']:.1%}", f"{eer_pt['accuracy']:.1%}"],
                 ["Balanced accuracy (the honest headline)", f"{d05['balanced_accuracy']:.1%}", f"{eer_pt['balanced_accuracy']:.1%}"],
             ],
-            top=Inches(4.65),
+            top=Inches(3.95),
             col_widths=[5.6, 3.1, 3.2],
             highlight_rows={4},
             row_h=Inches(0.46),

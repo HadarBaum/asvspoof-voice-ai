@@ -1,18 +1,23 @@
 # 10-minute presentation script
 
-Script for the 19-slide deck in `docs/slides/slides.pptx`.
+Script for the 20-slide deck in `docs/slides/slides.pptx`.
 Hebrew version: `docs/PRESENTATION_SCRIPT.he.md`.
 
 ## How to use this document
 
 It has two layers, and mixing them up will overrun your slot:
 
-- **SAY** blocks (`>` quoted) are the words you actually speak. They total **1,635
-  words — about 11.3 minutes** at 145 wpm, so there is over a minute to trim. In
-  order of what I would cut first: the confidence-histogram paragraph in the
-  streamed-eval section, the second half of trade-off **four** in the closing, and
-  the ROC sentence on the dev-results slide (the chart speaks for itself). All
-  three are covered in the DEEPER blocks for Q&A. Cutting those lands you at ~10:00.
+- **SAY** blocks (`>` quoted) are the words you actually speak. They total **1,769
+  words — about 12.2 minutes** at 145 wpm, against a 10-minute slot. The
+  four-slide paradox narrative is what costs the extra time, and it is worth it —
+  but **you must rehearse with cuts.** Drop these, in this order, and re-time:
+  the confidence-histogram paragraph in the streamed-eval section; the ROC
+  sentence on the dev-results slide (the chart speaks for itself); the
+  "reweighting the training loss" line on slide 8; the "threshold now lives
+  inside the artifact" line on Fix 2 (it is already a slide bullet); and the
+  second half of trade-off **four** in the closing. Every one of them is covered
+  in a DEEPER block for Q&A. Note the demo section runs *longer* than its word
+  count suggests, since you pause to click.
 - **DEEPER** blocks are everything behind each slide, in full. They are **not**
   meant to be read aloud — they exist so you can answer any follow-up without
   hunting through `EXPLANATION.md` mid-Q&A. Speaking the whole document would
@@ -35,10 +40,12 @@ when you reach it, cut the similar-clips playback — never the threshold story.
 | Problem & dataset | 1 | 0:45 |
 | Architecture diagram | 1 | 1:20 |
 | Ingest / Transform / Features / Load | 4 | 3:00 |
-| Classification + EER | 2 | 4:00 |
-| Results on dev — the accuracy paradox | 1 | 5:30 |
-| Results on dev — ROC & feature importance | 1 | 6:00 |
-| Embeddings & semantic search | 1 | 6:30 |
+| The accuracy paradox — where we started | 1 | 3:45 |
+| How EER is calculated | 1 | 4:15 |
+| Fix 1 — switching the model | 1 | 5:00 |
+| Fix 2 — switching the threshold | 1 | 5:45 |
+| Results on dev — ROC & feature importance | 1 | 6:10 |
+| Embeddings & semantic search | 1 | 6:35 |
 | Streaming enrichment | 1 | 7:00 |
 | Insights + results on streamed eval | 3 | 8:00 |
 | Live demo | 1 | 9:15 |
@@ -166,40 +173,96 @@ Load writes to two places in one pass: Parquet (what `train_classifier.py` and
 `index_embeddings.py` read) and the `asvspoof-training-features` index (50,224
 docs) so aggregations can run without touching Parquet. `foreachPartition` again
 builds one Elasticsearch client per partition, not per row.
+## 3:00 — 3:45 · The accuracy paradox — where we started
 
-## 3:00 — 4:00 · Classification + How EER is calculated
+> [Slow down. These next four slides are the heart of the talk.]
+>
+> We trained two models on identical features — Random Forest and Gradient
+> Boosting — split by the dataset's own train and dev columns, never randomly.
+>
+> Random Forest at scikit-learn's default threshold reported **92.3% dev
+> accuracy**. That sounds like a finished project. Then we looked at the
+> per-class breakdown. It caught **99.8%** of spoofed audio — and only **27%** of
+> real human speech.
+>
+> The reason is that dev is about 90% spoof. A model that simply leans toward
+> "spoof" scores beautifully on accuracy while being nearly useless at the job we
+> actually care about. Accuracy was hiding the failure, not measuring it.
+>
+> And reweighting the training loss doesn't fix it — the 0.5 cutoff applied at
+> evaluation time is a completely separate lever.
 
-> We didn't commit to one model. We trained two on identical features — Random
-> Forest and Gradient Boosting — and let a metric choose between them.
->
-> We split by the dataset's own train and dev columns, never randomly. A random
-> split could put the same speaker on both sides, and then the model partly
-> learns to recognize *that speaker* rather than what synthetic audio sounds
-> like. Your dev score goes up and your real performance doesn't.
->
-> [EER slide.]
->
-> We selected on **Equal Error Rate** — the operating point where the false-accept
-> rate and the false-reject rate are equal. It's threshold-independent, so you
-> can't flatter it by moving a cutoff. It was a *secondary* metric in ASVspoof2019
-> — min t-DCF was the primary one — and we use it because it needs no cost model.
->
-> On EER the two models are a tie: 9.09% for Random Forest against 9.26% for
-> Gradient Boosting, about three clips apart in two and a half thousand. We deploy
-> Gradient Boosting on other grounds — I'll come to those.
+**DEEPER.** The full report behind those three numbers:
 
-**DEEPER — why Gradient Boosting is deployed when Random Forest has the lower EER.**
-This is the sharpest question available on this slide, so have the answer ready.
+```
+                  precision    recall  f1-score   support
+bonafide (human)       0.93      0.27      0.42      2548
+      spoof (AI)       0.92      1.00      0.96     22296
+```
+
+Why two tree ensembles and not a CNN over spectrograms: a CNN would likely score
+higher, but feature importances stay directly inspectable on tree ensembles, and
+we can read sklearn's source and defend every line. We traded a few points of
+score for being able to explain the model completely — a deliberate choice
+matching the brief's emphasis on understanding over complexity. Say that
+directly if challenged; don't pretend it was a performance decision.
+
+Why compare two models at all: an unchallenged single number is weaker evidence
+than a real comparison, and training is fast enough on a laptop that the
+comparison is nearly free.
+
+## 3:45 — 4:15 · How EER is calculated
+
+> So we needed a metric accuracy couldn't fool.
+>
+> **Equal Error Rate** is the operating point where the false-accept rate and the
+> false-reject rate are equal. Sweep every possible threshold, track both error
+> rates, and find where the two curves cross. It's threshold-independent, so you
+> can't flatter it by moving a cutoff — which is exactly what accuracy let us do.
+>
+> Worth noting: EER was a *secondary* ASVspoof2019 metric — min t-DCF was primary.
+> We use EER because it needs no cost model.
+
+**DEEPER.** `compute_eer()` returns not just the error rate but the **score
+threshold at the crossing point**, which is the part downstream code can act on —
+EER itself isn't actionable, since `.predict()` always applies a fixed 0.5
+regardless of training class weights. That threshold is bundled into the model
+artifact alongside the classifier, which is what makes the fix on the next slide
+take effect everywhere at once.
+
+## 4:15 — 5:00 · Fix 1 — switching the model
+
+> First fix: the model. Same 0.5 threshold, no threshold change at all.
+>
+> Random Forest recovers **26.6%** of real human speech. Gradient Boosting, on
+> identical features at the identical threshold, recovers **80.2%**. That's
+> **54 points from the model choice alone.** Gradient Boosting's probabilities
+> are simply far less skewed — Random Forest's are crushed against 1.0, so almost
+> everything clears 0.5, which is why it catches 99.8% of spoofs while finding a
+> quarter of humans.
+>
+> And the table you'd expect to decide this doesn't. On EER the two are a **tie** —
+> 9.09% against 9.26%, about three clips apart in two and a half thousand. So the
+> deployed model is pinned, not picked by lowest EER: we keep Gradient Boosting for
+> calibration and for cost — 283 kilobytes against 30 megabytes.
+
+**DEEPER — why Gradient Boosting when Random Forest has the lower EER.** The
+sharpest question available on this slide.
 
 Random Forest was originally getting `class_weight="balanced"` *and* a balanced
 `sample_weight`. Those multiply in sklearn, so an 8.84:1 correction became 78:1 —
-over-correcting nine times past balance, which caused minority-class overfitting
-and cost real discriminative power (EER 12.31%, ROC-AUC 0.9506 — worse than no
-weighting at all). Fixed, Random Forest scores EER 9.09% / AUC 0.9689 against
-Gradient Boosting's 9.26% / 0.9695. **That is a tie**: the EER gap is about three
-clips out of 2,548 bonafide, well inside its confidence interval.
+over-correcting nine times past balance, causing minority-class overfitting and
+costing real discriminative power (EER 12.31%, ROC-AUC 0.9506 — worse than no
+weighting at all). Fixed, Random Forest scores 9.09% / 0.9689 against Gradient
+Boosting's 9.26% / 0.9695. **That is a tie**, and each model wins one of the two
+headline metrics.
 
-So the deployed model is pinned, not chosen by `min(EER)`, on three grounds:
+That the bug fix *didn't* rescue Random Forest's calibration is what makes this
+argument strong: it's now a genuine tie on EER and *still* finds only a quarter of
+real speech at the default threshold. The calibration gap is intrinsic to the
+model family, not an artifact of our bug.
+
+Three grounds for the pin:
 
 1. **Generalization to unseen attacks.** Dev holds only the *training* attacks
    A01–A06, so it cannot speak to the real task. On a 625-clip eval sample
@@ -215,64 +278,25 @@ Two honest caveats if pressed: the eval figure is a 625-clip subsample of 71,237
 and the AUC interval only just excludes zero — so "modestly but measurably
 better", not "clearly superior".
 
-**DEEPER.** Both models are reweighted for the train set's imbalance —
-`class_weight` for Random Forest, `compute_sample_weight("balanced", ...)` for
-Gradient Boosting, which has no `class_weight` parameter. The winner's model, its
-name, and its EER-optimal threshold are bundled into a single `joblib` artifact.
+## 5:00 — 5:45 · Fix 2 — switching the threshold
 
-`compute_eer()` sweeps thresholds, tracks false-acceptance against
-false-rejection, and returns both the error rate *and the score threshold at the
-crossing point* — that threshold is what gets stored and used instead of 0.5.
-
-Why two tree ensembles and not a CNN over spectrograms: a CNN would likely score
-higher, but feature importances stay directly inspectable on tree ensembles, and
-we can read sklearn's source and defend every line. We traded a few points of
-score for being able to explain the model completely. That is a deliberate choice
-against the course brief's emphasis on understanding over complexity — say so
-directly if challenged, don't pretend it was a performance decision.
-
-Why compare two models at all rather than pick one: an unchallenged single number
-is weaker evidence than a real comparison, and training is fast enough on a laptop
-that the comparison is nearly free. Full numbers in `docs/model_comparison.json`.
-
-## 4:00 — 5:30 · Results on dev — the accuracy paradox, found and fixed
-
-> [Slow down. This is the most important slide in the deck.]
+> Second fix, and it's independent of the first: the threshold. From
+> scikit-learn's default 0.5 to the EER-optimal **0.689**. Bonafide recall goes
+> from 80.2% to **90.7%**.
 >
-> This is where the project got interesting, and it's the part I would most want
-> to be asked about.
+> And the honest part — look at the table. Three of these five rows get *worse*.
+> Overall accuracy drops from 94.3% to 90.7%. Bonafide precision drops from 69%
+> to 53%: we now call more things human, including some spoofs we used to catch.
 >
-> Our first version reported 92.3% dev accuracy. That sounds like a finished
-> project. Then we looked at the per-class breakdown. It caught 99.8% of spoofed
-> audio — and only **27%** of real human speech.
+> That is a real trade, not a free win — you can only choose where on the ROC
+> curve to sit. The row that justifies the choice is the last one: **balanced
+> accuracy, 88.0% to 90.7%**, the only headline that improves, and the same metric
+> our eval results lead with later.
 >
-> The reason is that dev is about 90% spoof. A model that simply leans toward
-> "spoof" scores beautifully on accuracy while being nearly useless at the job we
-> actually care about. Accuracy was hiding the failure, not measuring it.
->
-> Two separate fixes, and it matters which is which. **Switching models** took
-> bonafide recall from 27% to 80% with no threshold change at all — Gradient
-> Boosting's probabilities are simply far less skewed. **Then switching the
-> threshold**, from scikit-learn's default 0.5 to the EER-optimal 0.689, took it
-> from 80% to **90.7%**.
->
-> And the honest part: overall dev accuracy went *down* when we did that — 94.3%
-> to 90.7%. Bonafide precision dropped too, from 0.93 to 0.53. We now call more
-> things human, including some spoofs we used to catch. That is a real trade. You
-> cannot maximize both classes at once on imbalanced data; you can only choose
-> where on the ROC curve to sit. We chose the principled point over the default.
+> The threshold now lives inside the model artifact, so nothing downstream can
+> drift back to 0.5.
 
-**The slide now carries the trade-off table**, generated from `model_comparison.json`: bonafide recall 80.2% -> 90.7%, bonafide precision 69.1% -> 52.8%, spoof recall 95.9% -> 90.7%, accuracy 94.3% -> 90.7%, balanced accuracy 88.0% -> 90.7% (the highlighted row). Three of those five get worse — point at the balanced-accuracy row when defending the choice, since it is the one headline that improves and it is the same metric the eval slides lead with.
-
-**DEEPER.** The original Random Forest report, for reference:
-
-```
-                  precision    recall  f1-score   support
-bonafide (human)       0.93      0.28      0.42      2548
-      spoof (AI)       0.92      1.00      0.96     22296
-```
-
-And the deployed Gradient Boosting model at its EER threshold:
+**DEEPER.** The deployed Gradient Boosting model at its EER threshold:
 
 ```
                   precision    recall  f1-score   support
@@ -284,23 +308,28 @@ bonafide (human)       0.53      0.91      0.67      2548
 approach versus the final deployed one," but it is the combined effect of two
 changes. The 26.6% is Random Forest at 0.5; the 91% is Gradient Boosting at its
 EER threshold. Gradient Boosting's *own* default-threshold number is 80.2%.
-The dashboard and slides show Gradient Boosting only, so their "before" column is
-80.2%. Conflating these is a mistake this project already made once and corrected
+Conflating these is a mistake this project already made once and corrected
 (commit `8db0c48`) — don't reintroduce it under questioning.
 
-Why reweighting wasn't enough on its own: `class_weight`/`sample_weight` reweight
-the *training loss*. The default 0.5 threshold applied at *evaluation* time is a
-separate lever. Fixing one does not fix the other — that is the actual technical
-lesson of this slide.
+**And volunteer this before anyone asks it:** the threshold fix works on *either*
+model. Bug-fixed Random Forest reaches 90.9% bonafide recall at its own EER
+threshold of 0.895 — essentially where Gradient Boosting lands. So the model
+switch was not *needed* to reach 91%. The two fixes are independent, and the model
+choice rests on the three grounds from the previous slide, not on final recall.
 
-| | Random Forest | Gradient Boosting (deployed) |
+| | Random Forest (bug-fixed) | Gradient Boosting (deployed) |
 |---|---|---|
 | Dev EER | 9.09% | 9.26% |
 | Bonafide recall @ 0.5 | 26.6% | 80.2% |
 | Spoof recall @ 0.5 | 99.8% | 95.9% |
 | Bonafide recall @ own EER threshold | 90.9% (thr 0.895) | 90.7% (thr 0.689) |
 
-## 5:30 — 6:00 · Results on dev — ROC curve & what the model learned
+Why reweighting wasn't enough on its own: `class_weight`/`sample_weight` reweight
+the *training loss*. The 0.5 threshold applied at *evaluation* time is a separate
+lever. Fixing one does not fix the other — that is the technical lesson of these
+two slides.
+
+## 5:45 — 6:10 · Results on dev — ROC curve & what the model learned
 
 > Two charts, both still on the dev partition.
 >
@@ -323,7 +352,7 @@ training script's scope, not in anything Elasticsearch stores. That is also why
 they belong here rather than with the streamed-eval results: nothing on this slide
 depends on the streaming pipeline having run.
 
-## 6:00 — 6:30 · AI capability 2 — embeddings & semantic search
+## 6:10 — 6:35 · AI capability 2 — embeddings & semantic search
 
 > Second capability: the same feature vectors reused as an embedding. No second
 > model, no pretrained audio encoder.
@@ -356,7 +385,7 @@ self-containment.
 on the trained model at all, so it can run before, after, or independently of
 `train_classifier.py`.
 
-## 6:30 — 7:00 · AI capability 3 — streaming enrichment
+## 6:35 — 7:00 · AI capability 3 — streaming enrichment
 
 > Third application. Kafka replays eval clips as events — metadata only, the
 > MinIO key and the true label, not the audio. A consumer fetches each clip from
