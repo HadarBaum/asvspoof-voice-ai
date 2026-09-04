@@ -4,9 +4,10 @@ Step 3 of the pipeline: train the AI capability itself - a bonafide-vs-spoof
 by batch_feature_extraction.py.
 
 Trains two candidate models (Random Forest and Gradient Boosting) on the same
-features and picks the one with the lower EER - the metric the official
-ASVspoof challenge itself is scored on, and a fairer comparison than raw
-accuracy on an imbalanced dev set. Both are simple enough to fully explain in
+features and picks the one with the lower EER. EER was an official secondary
+countermeasure evaluation metric in ASVspoof2019 (min t-DCF was the primary
+challenge metric), and it is a useful choice here because it directly balances
+the two classification error types on an imbalanced dev set. Both are simple enough to fully explain in
 Q&A (unlike, say, a CNN over raw spectrograms) while giving a real point of
 comparison for the results write-up rather than a single unchallenged number.
 
@@ -56,17 +57,20 @@ CHARTS_DIR = os.path.join(os.path.dirname(__file__), "..", "app", "static", "cha
 
 
 def compute_eer(y_true_spoof, y_score_spoof):
-    """The standard ASVspoof challenge metric: the point on the ROC curve where
-    the false-acceptance rate (spoof passed off as bonafide) equals the
-    false-rejection rate (bonafide wrongly flagged as spoof). More meaningful
-    here than raw accuracy, which - as this project's own numbers show - can
-    look good while quietly missing most of the minority (bonafide) class.
+    """Compute Equal Error Rate (EER) for scores where 1 = spoof and higher
+    scores indicate greater support for the spoof class.
 
-    Returns a dict with the error rate, the P(spoof) score threshold that
-    achieves it (since EER itself isn't something downstream code can act on -
-    scikit-learn's default `.predict()` always uses a fixed 0.5 threshold
-    regardless of training class weights), and the full ROC curve arrays so
-    callers can plot it without recomputing.
+    With this convention:
+      - FPR = bonafide clips incorrectly classified as spoof.
+      - FNR = spoof clips incorrectly classified as bonafide.
+
+    EER is the operating point where these two error rates are equal, or as
+    close as possible on the finite ROC curve. EER was an official secondary
+    countermeasure evaluation metric in ASVspoof2019; min t-DCF was the primary
+    challenge metric.
+
+    Returns the EER, the corresponding P(spoof) decision threshold, and the
+    ROC-curve arrays used for plotting.
     """
     fpr, tpr, thresholds = roc_curve(y_true_spoof, y_score_spoof)
     fnr = 1 - tpr
