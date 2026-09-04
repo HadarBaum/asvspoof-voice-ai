@@ -576,7 +576,7 @@ def main():
             "while failing the class we actually care about. Accuracy was hiding the failure, not measuring it.",
             "Reweighting the training loss does not fix this: the 0.5 cutoff applied at evaluation "
             "time is a separate lever.",
-        ], top=Inches(3.45), size=14, height=Inches(1.4))
+        ], top=Inches(3.45), size=17, height=Inches(1.6))
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
     add_stage_strip(slide, "train")
@@ -646,7 +646,7 @@ def main():
             "A statistical tie on EER — the gap is ~3 clips in 2,548 — so the deployed model is pinned, "
             "not picked by lowest EER. Gradient Boosting is kept for calibration and deployment cost: "
             "283KB vs. 29.7MB on disk, 0.55ms vs. 27.6ms per clip.",
-        ], top=Inches(5.25), size=13, height=Inches(1.0))
+        ], top=Inches(5.25), size=17, height=Inches(1.4))
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
 
@@ -673,12 +673,11 @@ def main():
         d05, eer_pt = gb["at_default_threshold_0.5"], gb["at_eer_threshold"]
         # Geometry: cards 1.55-3.25 (card_h left at its default - add_stat_cards places
         # the label box at top+1.05 with a fixed height, so a shorter card spills its
-        # label onto the background), one bullet 3.38-3.75, table 3.95 + 6 * 0.46 = 6.71.
+        # label onto the background), one bullet 3.38-3.83 at 17pt, table 4.15 + 6 * 0.47 = 6.97.
         # Slide is 7.5 tall; keep the sum under ~7.3 if any of these move.
         add_bullets(slide, [
-            "The threshold now lives inside the model artifact, so the streaming consumer and the "
-            "web app cannot drift back to 0.5.",
-        ], top=Inches(3.38), size=14, height=Inches(0.5))
+            "The threshold lives inside the model artifact, so nothing downstream can drift to 0.5.",
+        ], top=Inches(3.38), size=17, height=Inches(0.55))
         add_table(
             slide,
             ["Gradient Boosting on dev", "@ default 0.5", f"@ EER {eer_pt['threshold']:.3f}"],
@@ -689,11 +688,11 @@ def main():
                 ["Overall accuracy", f"{d05['accuracy']:.1%}", f"{eer_pt['accuracy']:.1%}"],
                 ["Balanced accuracy (the honest headline)", f"{d05['balanced_accuracy']:.1%}", f"{eer_pt['balanced_accuracy']:.1%}"],
             ],
-            top=Inches(3.95),
+            top=Inches(4.15),
             col_widths=[5.6, 3.1, 3.2],
             highlight_rows={4},
-            row_h=Inches(0.46),
-            size=13,
+            row_h=Inches(0.47),
+            size=15,
         )
     else:
         add_bullets(slide, ["Run the pipeline and re-generate slides for real numbers."])
