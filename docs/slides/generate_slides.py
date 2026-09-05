@@ -562,8 +562,8 @@ def main():
     # explained between the failure and the fixes so it arrives already motivated -
     # in the previous ordering the comparison table said "picked by EER" two slides
     # before the audience learned why accuracy could not be trusted.
-    slide = add_header(prs, "The accuracy paradox — where we started",
-                       "AI capability 1: Random Forest at scikit-learn's default 0.5 threshold", slide_num=next_num())
+    slide = add_header(prs, "AI capability 1 — the accuracy paradox",
+                       "Where we started: Random Forest at scikit-learn's default 0.5 threshold", slide_num=next_num())
     if comparison:
         rf0 = comparison["candidates"]["random_forest"]["at_default_threshold_0.5"]
         add_stat_cards(slide, [
@@ -582,7 +582,7 @@ def main():
     add_stage_strip(slide, "train")
 
     # --- 5. How EER is calculated --------------------------------------------
-    slide = add_header(prs, "How EER is calculated", "A secondary ASVspoof2019 metric - min t-DCF was the primary one", slide_num=next_num())
+    slide = add_header(prs, "How EER is calculated", "A secondary ASVspoof metric", slide_num=next_num())
     add_bullets(slide, [
         "Score every dev utterance with the model, giving each one a P(spoof) between 0 and 1.",
         "Sweep every possible decision threshold and, at each one, compute two error rates: the "
@@ -593,8 +593,7 @@ def main():
         "EER itself is that shared error rate at the crossing point; the threshold at that point is "
         "what actually gets deployed (see the model artifact in common/model.py).",
         "Lower EER = better separation. 0% would mean a threshold exists with zero errors of "
-        "either kind; this project's deployed model scores 9.26%. EER was a secondary ASVspoof2019 "
-        "metric (min t-DCF was primary) - we use it because it needs no cost model.",
+        "either kind; this project's deployed model scores 9.26%.",
     ], size=17)
     _rounded_rect(slide, Inches(0.6), Inches(5.85), SLIDE_W - Inches(1.2), Inches(1.15), CARD_BG, border_color=BORDER)
     code_box = slide.shapes.add_textbox(Inches(0.85), Inches(5.98), SLIDE_W - Inches(1.7), Inches(0.95))
@@ -643,9 +642,7 @@ def main():
             row_h=Inches(0.5),
         )
         add_bullets(slide, [
-            "A statistical tie on EER — the gap is ~3 clips in 2,548 — so the deployed model is pinned, "
-            "not picked by lowest EER. Gradient Boosting is kept for calibration and deployment cost: "
-            "283KB vs. 29.7MB on disk, 0.55ms vs. 27.6ms per clip.",
+            "A statistical tie on EER — the gap is ~3 clips in 2,548.",
         ], top=Inches(5.25), size=17, height=Inches(1.4))
     else:
         add_bullets(slide, ["Run pipeline/train_classifier.py and re-generate slides for real numbers."], top=Inches(2.3))
@@ -661,9 +658,9 @@ def main():
                        "0.5 to the EER-optimal 0.689, on the deployed model", slide_num=next_num())
     if metrics and comparison:
         add_stat_cards(slide, [
-            (f"{metrics['recall_bonafide_dev_default_threshold_0.5']:.0%}", "Bonafide recall\nat the default 0.5", RED),
-            (f"{metrics['recall_bonafide_dev']:.0%}", "Bonafide recall\nat the EER threshold", TEAL),
-            (f"{metrics['eer_dev']:.1%}", "Equal Error Rate\nwhere both errors are equal", BLUE),
+            (f"{metrics['recall_bonafide_dev_default_threshold_0.5']:.1%}", "Bonafide recall\nat the default 0.5", RED),
+            (f"{metrics['recall_bonafide_dev']:.1%}", "Bonafide recall\nat the EER threshold", TEAL),
+            (f"{metrics['eer_dev']:.2%}", "Equal Error Rate\nwhere both errors are equal", BLUE),
         ])
         # The trade-off table, not just the wins. Three of these five rows get WORSE at
         # the EER threshold - showing only the bonafide-recall gain would be picking the
